@@ -3,6 +3,7 @@ package com.ruoyi.jiedan.controller;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -13,10 +14,11 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
 
 /**
- * 推送设置 / 测试 / 手动触发提醒（需登录）
+ * 推送设置 / 测试 / 手动提醒。
  */
 @RestController
 @RequestMapping("/jiedan/push")
+@PreAuthorize("@ss.hasAnyRoles('admin,employee')")
 public class JiedanPushController
 {
     @Autowired

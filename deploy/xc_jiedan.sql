@@ -455,7 +455,7 @@ CREATE TABLE `sys_role` (
 
 LOCK TABLES `sys_role` WRITE;
 /*!40000 ALTER TABLE `sys_role` DISABLE KEYS */;
-INSERT INTO `sys_role` VALUES (1,'超级管理员','admin',1,'1',1,1,'0','0','admin','2026-06-20 00:43:42','',NULL,'超级管理员');
+INSERT INTO `sys_role` VALUES (1,'超级管理员','admin',1,'1',1,1,'0','0','admin','2026-06-20 00:43:42','',NULL,'超级管理员'),(2,'客户','customer',2,'2',0,0,'0','0','admin','2026-06-22 00:00:00','',NULL,'客户提交需求专用角色');
 /*!40000 ALTER TABLE `sys_role` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -543,7 +543,7 @@ CREATE TABLE `sys_user` (
 
 LOCK TABLES `sys_user` WRITE;
 /*!40000 ALTER TABLE `sys_user` DISABLE KEYS */;
-INSERT INTO `sys_user` VALUES (1,101,'admin','管理员','00','admin@qq.com','15888888888','1','','$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2','0','0','127.0.0.1','2026-06-21 15:39:52','2026-06-20 00:43:42','admin','2026-06-20 00:43:42','',NULL,'超级管理员');
+INSERT INTO `sys_user` VALUES (1,101,'admin','管理员','00','admin@qq.com','15888888888','1','','$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2','0','0','127.0.0.1','2026-06-21 15:39:52','2026-06-20 00:43:42','admin','2026-06-20 00:43:42','',NULL,'超级管理员'),(2,101,'customer','客户账号','2','customer@example.com','','2','','$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK','0','0','',NULL,'2026-06-22 00:00:00','admin','2026-06-22 00:00:00','',NULL,'默认客户账号');
 /*!40000 ALTER TABLE `sys_user` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -591,7 +591,7 @@ CREATE TABLE `sys_user_role` (
 
 LOCK TABLES `sys_user_role` WRITE;
 /*!40000 ALTER TABLE `sys_user_role` DISABLE KEYS */;
-INSERT INTO `sys_user_role` VALUES (1,1);
+INSERT INTO `sys_user_role` VALUES (1,1),(2,2);
 /*!40000 ALTER TABLE `sys_user_role` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

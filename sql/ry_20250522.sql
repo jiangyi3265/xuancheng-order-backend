@@ -60,6 +60,7 @@ create table sys_user (
 
 -- 默认密码: admin123
 insert into sys_user values(1, 101, 'admin', '管理员', '00', 'admin@qq.com', '15888888888', '1', '', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2', '0', '0', '127.0.0.1', sysdate(), sysdate(), 'admin', sysdate(), '', null, '超级管理员');
+insert into sys_user values(2, 101, 'customer', '客户账号', '2', 'customer@example.com', '', '2', '', '$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK', '0', '0', '', null, sysdate(), 'admin', sysdate(), '', null, '默认客户账号');
 
 
 -- ----------------------------
@@ -106,6 +107,7 @@ create table sys_role (
 ) engine=innodb auto_increment=100 comment = '角色信息表';
 
 insert into sys_role values('1', '超级管理员', 'admin', 1, 1, 1, 1, '0', '0', 'admin', sysdate(), '', null, '超级管理员');
+insert into sys_role values('2', '客户', 'customer', 2, 2, 0, 0, '0', '0', 'admin', sysdate(), '', null, '客户提交需求专用角色');
 
 
 -- ----------------------------
@@ -152,6 +154,7 @@ create table sys_user_role (
 ) engine=innodb comment = '用户和角色关联表';
 
 insert into sys_user_role values ('1', '1');
+insert into sys_user_role values ('2', '2');
 
 
 -- ----------------------------
