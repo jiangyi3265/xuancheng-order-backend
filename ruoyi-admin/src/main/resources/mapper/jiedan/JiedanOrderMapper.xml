@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanOrderMapper">
+
+    <resultMap id="JiedanOrderResult" type="com.ruoyi.jiedan.domain.JiedanOrder">
+        <id     property="id"          column="id"          />
+        <result property="orderNo"     column="order_no"    />
+        <result property="title"       column="title"       />
+        <result property="channel"     column="channel"     />
+        <result property="customer"    column="customer"    />
+        <result property="contact"     column="contact"     />
+        <result property="amount"      column="amount"      />
+        <result property="ownerId"     column="owner_id"    />
+        <result property="status"      column="status"      />
+        <result property="priority"    column="priority"    />
+        <result property="deadline"    column="deadline"    />
+        <result property="requirement" column="requirement" />
+        <result property="attachments" column="attachments" />
+        <result property="unread"      column="unread"      />
+        <result property="paid"        column="paid"        />
+        <result property="revisions"   column="revisions"   />
+        <result property="createTime"  column="create_time" />
+        <result property="updateTime"  column="update_time" />
+    </resultMap>
+
+    <sql id="cols">
+        id, order_no, title, channel, customer, contact, amount, owner_id, status,
+        priority, deadline, requirement, attachments, unread, paid, revisions, create_time, update_time
+    </sql>
+
+    <select id="selectAll" resultMap="JiedanOrderResult">
+        select <include refid="cols"/> from jiedan_order order by id desc
+    </select>
+
+    <select id="selectById" parameterType="Long" resultMap="JiedanOrderResult">
+        select <include refid="cols"/> from jiedan_order where id = #{id}
+    </select>
+
+    <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanOrder" useGeneratedKeys="true" keyProperty="id">
+        insert into jiedan_order
+        (order_no, title, channel, customer, contact, amount, owner_id, status, priority,
+         deadline, requirement, attachments, unread, paid, revisions, create_time, update_time)
+        values
+        (#{orderNo}, #{title}, #{channel}, #{customer}, #{contact}, #{amount}, #{ownerId}, #{status}, #{priority},
+         #{deadline}, #{requirement}, #{attachments}, #{unread}, #{paid}, #{revisions}, #{createTime}, #{updateTime})
+    </insert>
+
+    <update id="update" parameterType="com.ruoyi.jiedan.domain.JiedanOrder">
+        update jiedan_order
+        <set>
+            <if test="orderNo != null">order_no = #{orderNo},</if>
+            <if test="title != null">title = #{title},</if>
+            <if test="channel != null">channel = #{channel},</if>
+            <if test="customer != null">customer = #{customer},</if>
+            <if test="contact != null">contact = #{contact},</if>
+            <if test="amount != null">amount = #{amount},</if>
+            <if test="ownerId != null">owner_id = #{ownerId},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="priority != null">priority = #{priority},</if>
+            <if test="deadline != null">deadline = #{deadline},</if>
+            <if test="requirement != null">requirement = #{requirement},</if>
+            <if test="attachments != null">attachments = #{attachments},</if>
+            <if test="unread != null">unread = #{unread},</if>
+            <if test="paid != null">paid = #{paid},</if>
+            <if test="revisions != null">revisions = #{revisions},</if>
+            <if test="updateTime != null">update_time = #{updateTime},</if>
+        </set>
+        where id = #{id}
+    </update>
+
+    <delete id="deleteById" parameterType="Long">
+        delete from jiedan_order where id = #{id}
+    </delete>
+
+</mapper>

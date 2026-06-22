@@ -1,0 +1,14 @@
+# 数据库连接覆盖（放到 jar 同目录，会覆盖 jar 内的同名配置，无需重新打包）
+# 只改下面三项：服务器上的 MySQL 地址 / 账号 / 密码
+spring:
+    datasource:
+        druid:
+            master:
+                url: jdbc:mysql://localhost:3306/xc_jiedan?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
+                username: root
+                password: 改成你服务器的MySQL密码
+    # Redis 如非 localhost 无密码，取消注释并填写
+    # redis:
+    #     host: localhost
+    #     port: 6379
+    #     password:

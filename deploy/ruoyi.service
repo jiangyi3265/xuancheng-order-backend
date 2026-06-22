@@ -1,0 +1,15 @@
+[Unit]
+Description=Xuancheng Order Backend (RuoYi)
+After=network.target mysqld.service redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/xuancheng
+ExecStart=/usr/bin/java -jar /opt/xuancheng/ruoyi-admin.jar
+SuccessExitStatus=143
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
