@@ -10,6 +10,7 @@ env:
   APP_DIR: /www/wwwroot/kejijava
   SERVICE_NAME: kejijava
   JAR_NAME: ruoyi-admin.jar
+  REMOTE_TMP: /tmp/kejijava-deploy-${{ github.run_id }}
 
 jobs:
   deploy:
@@ -37,7 +38,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
           source: ruoyi-admin/target/${{ env.JAR_NAME }}
-          target: /tmp/kejijava-deploy
+          target: ${{ env.REMOTE_TMP }}
           strip_components: 2
           overwrite: true
 
@@ -47,12 +48,13 @@ jobs:
           APP_DIR: ${{ env.APP_DIR }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
+          REMOTE_TMP: ${{ env.REMOTE_TMP }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,REMOTE_TMP
           script: |
             set -e
             if ! command -v java >/dev/null 2>&1; then
@@ -70,8 +72,8 @@ jobs:
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            mv "/tmp/kejijava-deploy/$JAR_NAME" "$APP_DIR/$JAR_NAME"
-            rm -rf /tmp/kejijava-deploy
+            mv "$REMOTE_TMP/$JAR_NAME" "$APP_DIR/$JAR_NAME"
+            rm -rf "$REMOTE_TMP"
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
