@@ -51,7 +51,7 @@ jobs:
             }
 
             configure_java() {
-              for candidate in /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk /usr/lib/jvm/java-11-openjdk-amd64 /usr/lib/jvm/java-11-openjdk; do
+              for candidate in /usr/lib/jvm/*17* /usr/lib/jvm/*11*; do
                 if [ -x "$candidate/bin/java" ]; then
                   export JAVA_HOME="$candidate"
                   export PATH="$JAVA_HOME/bin:$PATH"
