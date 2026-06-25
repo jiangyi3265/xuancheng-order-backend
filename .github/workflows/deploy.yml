@@ -1,0 +1,90 @@
+name: Deploy backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  APP_DIR: /www/wwwroot/kejijava
+  SERVICE_NAME: kejijava
+  JAR_NAME: ruoyi-admin.jar
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: maven
+
+      - name: Build jar
+        run: mvn -B clean package -DskipTests
+
+      - name: Upload jar
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          source: ruoyi-admin/target/${{ env.JAR_NAME }}
+          target: /tmp/kejijava-deploy
+          strip_components: 2
+
+      - name: Restart backend service
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_DIR: ${{ env.APP_DIR }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          JAR_NAME: ${{ env.JAR_NAME }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME
+          script: |
+            set -e
+            if ! command -v java >/dev/null 2>&1; then
+              echo "java is not installed on the server"
+              exit 1
+            fi
+
+            mkdir -p "$APP_DIR"
+            if [ -f "$APP_DIR/$JAR_NAME" ]; then
+              cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
+            fi
+            mv "/tmp/kejijava-deploy/$JAR_NAME" "$APP_DIR/$JAR_NAME"
+            rm -rf /tmp/kejijava-deploy
+
+            cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
+            [Unit]
+            Description=Xuancheng Order Backend
+            After=network.target
+
+            [Service]
+            Type=simple
+            WorkingDirectory=$APP_DIR
+            ExecStart=/usr/bin/java -jar $APP_DIR/$JAR_NAME
+            SuccessExitStatus=143
+            Restart=always
+            RestartSec=5
+            User=root
+
+            [Install]
+            WantedBy=multi-user.target
+            SERVICE
+
+            systemctl daemon-reload
+            systemctl enable "$SERVICE_NAME"
+            systemctl restart "$SERVICE_NAME"
+            systemctl --no-pager --full status "$SERVICE_NAME"
