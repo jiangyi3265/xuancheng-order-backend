@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: true
+
 env:
   APP_DIR: /www/wwwroot/kejijava
   SERVICE_NAME: kejijava
@@ -55,6 +59,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
           envs: APP_DIR,SERVICE_NAME,JAR_NAME,REMOTE_TMP
+          command_timeout: 2m
           script: |
             set -e
             if ! command -v java >/dev/null 2>&1; then
@@ -96,4 +101,6 @@ jobs:
             systemctl daemon-reload
             systemctl enable "$SERVICE_NAME"
             systemctl restart "$SERVICE_NAME"
-            systemctl --no-pager --full status "$SERVICE_NAME"
+            sleep 5
+            systemctl is-active --quiet "$SERVICE_NAME"
+            journalctl -u "$SERVICE_NAME" -n 80 --no-pager
