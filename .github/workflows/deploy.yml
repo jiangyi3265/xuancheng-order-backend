@@ -17,8 +17,7 @@ env:
   APP_DIR: /www/wwwroot/kejijava
   SERVICE_NAME: kejijava
   JAR_NAME: ruoyi-admin.jar
-  RELEASE_TAG: backend-latest
-  DOWNLOAD_URL: https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar
+  REMOTE_TMP: /tmp/kejijava-deploy-${{ github.run_id }}
 
 jobs:
   deploy:
@@ -38,27 +37,46 @@ jobs:
       - name: Build jar
         run: mvn -B clean package -DskipTests
 
-      - name: Publish release jar
+      - name: Install sshpass
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Upload jar chunks
+        timeout-minutes: 45
         env:
-          GH_TOKEN: ${{ github.token }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
           set -e
-          gh release delete "$RELEASE_TAG" --cleanup-tag --yes || true
-          gh release create "$RELEASE_TAG" "ruoyi-admin/target/$JAR_NAME#$JAR_NAME" --title "Backend latest" --notes "Automated backend build from $GITHUB_SHA" --latest=false
+          export SSHPASS="$SERVER_PASSWORD"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=6"
+          PART_DIR="$RUNNER_TEMP/jar-parts"
+          mkdir -p "$PART_DIR"
+          split -b 1M -d -a 3 "ruoyi-admin/target/$JAR_NAME" "$PART_DIR/$JAR_NAME.part-"
 
-      - name: Download and restart on server
+          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "rm -rf '$REMOTE_TMP' && mkdir -p '$REMOTE_TMP'"
+          for part in "$PART_DIR"/"$JAR_NAME".part-*; do
+            echo "Uploading $(basename "$part")"
+            timeout 90s sshpass -e scp -O $SSH_OPTS -P "$SERVER_PORT" "$part" "$SERVER_USER@$SERVER_HOST:$REMOTE_TMP/$(basename "$part")"
+          done
+          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "cat '$REMOTE_TMP/$JAR_NAME.part-'* > '$REMOTE_TMP/$JAR_NAME' && rm -f '$REMOTE_TMP/$JAR_NAME.part-'*"
+
+      - name: Restart on server
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_DIR: ${{ env.APP_DIR }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
-          DOWNLOAD_URL: ${{ env.DOWNLOAD_URL }}
+          REMOTE_TMP: ${{ env.REMOTE_TMP }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME,DOWNLOAD_URL
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,REMOTE_TMP
           command_timeout: 10m
           script: |
             set -e
@@ -103,13 +121,13 @@ jobs:
             fi
 
             mkdir -p "$APP_DIR"
-            curl -fL --retry 5 --retry-delay 5 -o "$APP_DIR/$JAR_NAME.new" "$DOWNLOAD_URL"
-            test -s "$APP_DIR/$JAR_NAME.new"
+            test -s "$REMOTE_TMP/$JAR_NAME"
 
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            mv "$APP_DIR/$JAR_NAME.new" "$APP_DIR/$JAR_NAME"
+            mv "$REMOTE_TMP/$JAR_NAME" "$APP_DIR/$JAR_NAME"
+            rm -rf "$REMOTE_TMP"
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
