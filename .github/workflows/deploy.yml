@@ -6,46 +6,71 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: deploy-backend
   cancel-in-progress: true
 
 env:
   APP_DIR: /www/wwwroot/kejijava
-  REPO_URL: https://github.com/jiangyi3265/xuancheng-order-backend.git
   SERVICE_NAME: kejijava
   JAR_NAME: ruoyi-admin.jar
+  RELEASE_TAG: backend-latest
+  DOWNLOAD_URL: https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Build and deploy on server
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Build jar
+        run: mvn -B clean package -DskipTests
+
+      - name: Publish release jar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release delete "$RELEASE_TAG" --cleanup-tag --yes || true
+          gh release create "$RELEASE_TAG" "ruoyi-admin/target/$JAR_NAME#$JAR_NAME" --title "Backend latest" --notes "Automated backend build from $GITHUB_SHA" --latest=false
+
+      - name: Download and restart on server
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_DIR: ${{ env.APP_DIR }}
-          REPO_URL: ${{ env.REPO_URL }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
+          DOWNLOAD_URL: ${{ env.DOWNLOAD_URL }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,REPO_URL,SERVICE_NAME,JAR_NAME
-          command_timeout: 30m
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,DOWNLOAD_URL
+          command_timeout: 10m
           script: |
             set -e
 
-            install_packages() {
+            install_runtime_packages() {
               if command -v apt-get >/dev/null 2>&1; then
                 apt-get update
-                DEBIAN_FRONTEND=noninteractive apt-get install -y git maven openjdk-17-jdk
+                DEBIAN_FRONTEND=noninteractive apt-get install -y curl openjdk-17-jdk
               elif command -v yum >/dev/null 2>&1; then
-                yum install -y git maven java-17-openjdk-devel || yum install -y git maven java-11-openjdk-devel
+                yum install -y curl java-17-openjdk-devel || yum install -y curl java-17-konajdk-devel || yum install -y curl java-11-openjdk-devel
               else
-                echo "unsupported package manager; install git, maven, and Java 11+ manually"
+                echo "unsupported package manager; install curl and Java 11+ manually"
                 exit 1
               fi
             }
@@ -61,13 +86,13 @@ jobs:
               JAVA_BIN="$(command -v java)"
             }
 
-            if ! command -v git >/dev/null 2>&1 || ! command -v mvn >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
-              install_packages
+            if ! command -v curl >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+              install_runtime_packages
             fi
             configure_java
             JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
             if [ "$JAVA_MAJOR" -lt 11 ]; then
-              install_packages
+              install_runtime_packages
               configure_java
               JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
             fi
@@ -77,23 +102,14 @@ jobs:
               exit 1
             fi
 
-            SRC_DIR="$APP_DIR/source"
             mkdir -p "$APP_DIR"
-            if [ -d "$SRC_DIR/.git" ]; then
-              git -C "$SRC_DIR" fetch --prune origin main
-              git -C "$SRC_DIR" reset --hard origin/main
-            else
-              rm -rf "$SRC_DIR"
-              git clone --branch main "$REPO_URL" "$SRC_DIR"
-            fi
-
-            cd "$SRC_DIR"
-            mvn -B clean package -DskipTests
+            curl -fL --retry 5 --retry-delay 5 -o "$APP_DIR/$JAR_NAME.new" "$DOWNLOAD_URL"
+            test -s "$APP_DIR/$JAR_NAME.new"
 
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            cp "ruoyi-admin/target/$JAR_NAME" "$APP_DIR/$JAR_NAME"
+            mv "$APP_DIR/$JAR_NAME.new" "$APP_DIR/$JAR_NAME"
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
