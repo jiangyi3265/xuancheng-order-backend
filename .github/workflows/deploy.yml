@@ -40,6 +40,7 @@ jobs:
           sudo apt-get install -y sshpass
 
       - name: Upload jar
+        timeout-minutes: 12
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
@@ -48,8 +49,17 @@ jobs:
         run: |
           set -e
           export SSHPASS="$SERVER_PASSWORD"
-          sshpass -e ssh -o StrictHostKeyChecking=no -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "mkdir -p '$REMOTE_TMP'"
-          sshpass -e scp -o StrictHostKeyChecking=no -P "$SERVER_PORT" "ruoyi-admin/target/$JAR_NAME" "$SERVER_USER@$SERVER_HOST:$REMOTE_TMP/$JAR_NAME"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          PART_DIR="$RUNNER_TEMP/jar-parts"
+          mkdir -p "$PART_DIR"
+          split -b 10M -d -a 3 "ruoyi-admin/target/$JAR_NAME" "$PART_DIR/$JAR_NAME.part-"
+
+          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "rm -rf '$REMOTE_TMP' && mkdir -p '$REMOTE_TMP'"
+          for part in "$PART_DIR"/"$JAR_NAME".part-*; do
+            echo "Uploading $(basename "$part")"
+            timeout 120s sshpass -e scp -O $SSH_OPTS -P "$SERVER_PORT" "$part" "$SERVER_USER@$SERVER_HOST:$REMOTE_TMP/$(basename "$part")"
+          done
+          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "cat '$REMOTE_TMP/$JAR_NAME.part-'* > '$REMOTE_TMP/$JAR_NAME' && rm -f '$REMOTE_TMP/$JAR_NAME.part-'*"
 
       - name: Restart backend service
         uses: appleboy/ssh-action@v1.0.3
