@@ -17,7 +17,8 @@ env:
   APP_DIR: /www/wwwroot/kejijava
   SERVICE_NAME: kejijava
   JAR_NAME: ruoyi-admin.jar
-  REMOTE_TMP: /tmp/kejijava-deploy-${{ github.run_id }}
+  RELEASE_TAG: backend-latest
+  DOWNLOAD_URL: https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar
 
 jobs:
   deploy:
@@ -37,49 +38,42 @@ jobs:
       - name: Build jar
         run: mvn -B clean package -DskipTests
 
-      - name: Install sshpass
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-
-      - name: Upload jar chunks
-        timeout-minutes: 45
+      - name: Publish release jar
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          export SSHPASS="$SERVER_PASSWORD"
-          SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=6"
-          PART_DIR="$RUNNER_TEMP/jar-parts"
-          mkdir -p "$PART_DIR"
-          split -b 1M -d -a 3 "ruoyi-admin/target/$JAR_NAME" "$PART_DIR/$JAR_NAME.part-"
+          gh release delete "$RELEASE_TAG" --cleanup-tag --yes || true
+          gh release create "$RELEASE_TAG" "ruoyi-admin/target/$JAR_NAME#$JAR_NAME" --title "Backend latest" --notes "Automated backend build from $GITHUB_SHA" --latest=false
 
-          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "rm -rf '$REMOTE_TMP' && mkdir -p '$REMOTE_TMP'"
-          for part in "$PART_DIR"/"$JAR_NAME".part-*; do
-            echo "Uploading $(basename "$part")"
-            timeout 90s sshpass -e scp -O $SSH_OPTS -P "$SERVER_PORT" "$part" "$SERVER_USER@$SERVER_HOST:$REMOTE_TMP/$(basename "$part")"
-          done
-          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "cat '$REMOTE_TMP/$JAR_NAME.part-'* > '$REMOTE_TMP/$JAR_NAME' && rm -f '$REMOTE_TMP/$JAR_NAME.part-'*"
-
-      - name: Restart on server
+      - name: Start server-side deploy
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_DIR: ${{ env.APP_DIR }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
-          REMOTE_TMP: ${{ env.REMOTE_TMP }}
+          DOWNLOAD_URL: ${{ env.DOWNLOAD_URL }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME,REMOTE_TMP
-          command_timeout: 10m
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,DOWNLOAD_URL
+          command_timeout: 1m
           script: |
             set -e
+            mkdir -p "$APP_DIR"
+
+            cat > "$APP_DIR/deploy_from_release.sh" <<'SCRIPT'
+            #!/usr/bin/env bash
+            set -e
+            APP_DIR="${APP_DIR:-/www/wwwroot/kejijava}"
+            SERVICE_NAME="${SERVICE_NAME:-kejijava}"
+            JAR_NAME="${JAR_NAME:-ruoyi-admin.jar}"
+            DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar}"
+            LOG_FILE="\$APP_DIR/deploy.log"
+            exec >> "\$LOG_FILE" 2>&1
+            echo "==== deploy started at \$(date -Is) ===="
 
             install_runtime_packages() {
               if command -v apt-get >/dev/null 2>&1; then
@@ -121,13 +115,14 @@ jobs:
             fi
 
             mkdir -p "$APP_DIR"
-            test -s "$REMOTE_TMP/$JAR_NAME"
+            echo "downloading \$DOWNLOAD_URL"
+            curl -fL --retry 20 --retry-delay 10 --connect-timeout 30 --speed-time 120 --speed-limit 1024 -o "\$APP_DIR/\$JAR_NAME.new" "\$DOWNLOAD_URL"
+            test -s "\$APP_DIR/\$JAR_NAME.new"
 
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            mv "$REMOTE_TMP/$JAR_NAME" "$APP_DIR/$JAR_NAME"
-            rm -rf "$REMOTE_TMP"
+            mv "\$APP_DIR/\$JAR_NAME.new" "\$APP_DIR/\$JAR_NAME"
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
@@ -153,3 +148,9 @@ jobs:
             sleep 5
             systemctl is-active --quiet "$SERVICE_NAME"
             journalctl -u "$SERVICE_NAME" -n 80 --no-pager
+            echo "==== deploy finished at \$(date -Is) ===="
+            SCRIPT
+
+            chmod +x "$APP_DIR/deploy_from_release.sh"
+            APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" JAR_NAME="$JAR_NAME" DOWNLOAD_URL="$DOWNLOAD_URL" nohup "$APP_DIR/deploy_from_release.sh" >/dev/null 2>&1 &
+            echo "server-side deploy started; log: $APP_DIR/deploy.log"
