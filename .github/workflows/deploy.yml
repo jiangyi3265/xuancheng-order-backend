@@ -23,7 +23,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 8
+          java-version: 17
           cache: maven
 
       - name: Build jar
@@ -56,6 +56,12 @@ jobs:
             set -e
             if ! command -v java >/dev/null 2>&1; then
               echo "java is not installed on the server"
+              exit 1
+            fi
+            JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
+            if [ "$JAVA_MAJOR" -lt 11 ]; then
+              echo "Java 11 or newer is required on the server"
+              java -version
               exit 1
             fi
 
