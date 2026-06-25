@@ -12,88 +12,88 @@ concurrency:
 
 env:
   APP_DIR: /www/wwwroot/kejijava
+  REPO_URL: https://github.com/jiangyi3265/xuancheng-order-backend.git
   SERVICE_NAME: kejijava
   JAR_NAME: ruoyi-admin.jar
-  REMOTE_TMP: /tmp/kejijava-deploy-${{ github.run_id }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-          cache: maven
-
-      - name: Build jar
-        run: mvn -B clean package -DskipTests
-
-      - name: Install sshpass
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-
-      - name: Upload jar
-        timeout-minutes: 12
-        env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-        run: |
-          set -e
-          export SSHPASS="$SERVER_PASSWORD"
-          SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
-          PART_DIR="$RUNNER_TEMP/jar-parts"
-          mkdir -p "$PART_DIR"
-          split -b 10M -d -a 3 "ruoyi-admin/target/$JAR_NAME" "$PART_DIR/$JAR_NAME.part-"
-
-          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "rm -rf '$REMOTE_TMP' && mkdir -p '$REMOTE_TMP'"
-          for part in "$PART_DIR"/"$JAR_NAME".part-*; do
-            echo "Uploading $(basename "$part")"
-            timeout 120s sshpass -e scp -O $SSH_OPTS -P "$SERVER_PORT" "$part" "$SERVER_USER@$SERVER_HOST:$REMOTE_TMP/$(basename "$part")"
-          done
-          timeout 120s sshpass -e ssh $SSH_OPTS -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "cat '$REMOTE_TMP/$JAR_NAME.part-'* > '$REMOTE_TMP/$JAR_NAME' && rm -f '$REMOTE_TMP/$JAR_NAME.part-'*"
-
-      - name: Restart backend service
+      - name: Build and deploy on server
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_DIR: ${{ env.APP_DIR }}
+          REPO_URL: ${{ env.REPO_URL }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
-          REMOTE_TMP: ${{ env.REMOTE_TMP }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME,REMOTE_TMP
-          command_timeout: 2m
+          envs: APP_DIR,REPO_URL,SERVICE_NAME,JAR_NAME
+          command_timeout: 30m
           script: |
             set -e
-            if ! command -v java >/dev/null 2>&1; then
-              echo "java is not installed on the server"
-              exit 1
+
+            install_packages() {
+              if command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                DEBIAN_FRONTEND=noninteractive apt-get install -y git maven openjdk-17-jdk
+              elif command -v yum >/dev/null 2>&1; then
+                yum install -y git maven java-17-openjdk-devel || yum install -y git maven java-11-openjdk-devel
+              else
+                echo "unsupported package manager; install git, maven, and Java 11+ manually"
+                exit 1
+              fi
+            }
+
+            configure_java() {
+              for candidate in /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk /usr/lib/jvm/java-11-openjdk-amd64 /usr/lib/jvm/java-11-openjdk; do
+                if [ -x "$candidate/bin/java" ]; then
+                  export JAVA_HOME="$candidate"
+                  export PATH="$JAVA_HOME/bin:$PATH"
+                  break
+                fi
+              done
+              JAVA_BIN="$(command -v java)"
+            }
+
+            if ! command -v git >/dev/null 2>&1 || ! command -v mvn >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+              install_packages
             fi
+            configure_java
             JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
+            if [ "$JAVA_MAJOR" -lt 11 ]; then
+              install_packages
+              configure_java
+              JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
+            fi
             if [ "$JAVA_MAJOR" -lt 11 ]; then
               echo "Java 11 or newer is required on the server"
               java -version
               exit 1
             fi
 
+            SRC_DIR="$APP_DIR/source"
             mkdir -p "$APP_DIR"
+            if [ -d "$SRC_DIR/.git" ]; then
+              git -C "$SRC_DIR" fetch --prune origin main
+              git -C "$SRC_DIR" reset --hard origin/main
+            else
+              rm -rf "$SRC_DIR"
+              git clone --branch main "$REPO_URL" "$SRC_DIR"
+            fi
+
+            cd "$SRC_DIR"
+            mvn -B clean package -DskipTests
+
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            mv "$REMOTE_TMP/$JAR_NAME" "$APP_DIR/$JAR_NAME"
-            rm -rf "$REMOTE_TMP"
+            cp "ruoyi-admin/target/$JAR_NAME" "$APP_DIR/$JAR_NAME"
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
@@ -103,7 +103,7 @@ jobs:
             [Service]
             Type=simple
             WorkingDirectory=$APP_DIR
-            ExecStart=/usr/bin/java -jar $APP_DIR/$JAR_NAME
+            ExecStart=$JAVA_BIN -jar $APP_DIR/$JAR_NAME
             SuccessExitStatus=143
             Restart=always
             RestartSec=5
