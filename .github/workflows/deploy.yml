@@ -39,6 +39,7 @@ jobs:
           source: ruoyi-admin/target/${{ env.JAR_NAME }}
           target: /tmp/kejijava-deploy
           strip_components: 2
+          overwrite: true
 
       - name: Restart backend service
         uses: appleboy/ssh-action@v1.0.3
