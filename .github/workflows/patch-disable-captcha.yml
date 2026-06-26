@@ -21,17 +21,17 @@ jobs:
       - name: Build patched class
         run: |
           mvn -B -pl ruoyi-system -am package -DskipTests
-          mkdir -p patch/BOOT-INF/classes/com/ruoyi/system/service/impl
-          cp ruoyi-system/target/classes/com/ruoyi/system/service/impl/SysConfigServiceImpl.class patch/BOOT-INF/classes/com/ruoyi/system/service/impl/
+          mkdir -p patch/BOOT-INF/lib
+          cp ruoyi-system/target/ruoyi-system-3.9.1.jar patch/BOOT-INF/lib/
 
-      - name: Upload patched class
+      - name: Upload patched jar
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          source: patch/BOOT-INF/classes/com/ruoyi/system/service/impl/SysConfigServiceImpl.class
+          source: patch/BOOT-INF/lib/ruoyi-system-3.9.1.jar
           target: /tmp/captcha-patch
           strip_components: 1
           overwrite: true
@@ -48,9 +48,9 @@ jobs:
             set -e
             cd /tmp/captcha-patch
             if command -v jar >/dev/null 2>&1; then
-              jar uf /www/wwwroot/kejijava/ruoyi-admin.jar BOOT-INF/classes/com/ruoyi/system/service/impl/SysConfigServiceImpl.class
+              jar uf /www/wwwroot/kejijava/ruoyi-admin.jar BOOT-INF/lib/ruoyi-system-3.9.1.jar
             else
-              zip -u /www/wwwroot/kejijava/ruoyi-admin.jar BOOT-INF/classes/com/ruoyi/system/service/impl/SysConfigServiceImpl.class
+              zip -u /www/wwwroot/kejijava/ruoyi-admin.jar BOOT-INF/lib/ruoyi-system-3.9.1.jar
             fi
             rm -rf /tmp/captcha-patch
             systemctl restart kejijava
