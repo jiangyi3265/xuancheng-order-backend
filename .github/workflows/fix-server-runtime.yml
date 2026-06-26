@@ -25,10 +25,28 @@ jobs:
               DEBIAN_FRONTEND=noninteractive apt-get install -y fontconfig fonts-dejavu-core libxrender1 libxext6
             fi
             fc-cache -f || true
-            if [ -f /etc/systemd/system/kejijava.service ]; then
-              sed -i 's#ExecStart=\\(.*java\\) -jar #ExecStart=\\1 -Djava.awt.headless=true -jar #' /etc/systemd/system/kejijava.service
-              systemctl daemon-reload
+            JAVA_BIN="$(find /usr/lib/jvm -path '*17*/bin/java' -type f | head -n 1)"
+            if [ -z "$JAVA_BIN" ]; then
+              JAVA_BIN="$(command -v java)"
             fi
+            cat > /etc/systemd/system/kejijava.service <<SERVICE
+            [Unit]
+            Description=Xuancheng Order Backend
+            After=network.target
+
+            [Service]
+            Type=simple
+            WorkingDirectory=/www/wwwroot/kejijava
+            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar /www/wwwroot/kejijava/ruoyi-admin.jar
+            SuccessExitStatus=143
+            Restart=always
+            RestartSec=5
+            User=root
+
+            [Install]
+            WantedBy=multi-user.target
+            SERVICE
+            systemctl daemon-reload
             if command -v mysql >/dev/null 2>&1; then
               for MYSQL_PWD_VALUE in '123456' '${{ secrets.SERVER_PASSWORD }}' ''; do
                 if MYSQL_PWD="$MYSQL_PWD_VALUE" mysql -uroot -D xc_jiedan -e "update sys_config set config_value='false' where config_key='sys.account.captchaEnabled';" >/dev/null 2>&1; then
