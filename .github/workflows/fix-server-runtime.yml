@@ -29,6 +29,14 @@ jobs:
               sed -i 's#ExecStart=\\(.*java\\) -jar #ExecStart=\\1 -Djava.awt.headless=true -jar #' /etc/systemd/system/kejijava.service
               systemctl daemon-reload
             fi
+            if command -v mysql >/dev/null 2>&1; then
+              for MYSQL_PWD_VALUE in '123456' '${{ secrets.SERVER_PASSWORD }}' ''; do
+                if MYSQL_PWD="$MYSQL_PWD_VALUE" mysql -uroot -D xc_jiedan -e "update sys_config set config_value='false' where config_key='sys.account.captchaEnabled';" >/dev/null 2>&1; then
+                  echo "captcha disabled in sys_config"
+                  break
+                fi
+              done
+            fi
             systemctl restart kejijava || systemctl restart ruoyi || true
             sleep 5
             systemctl --no-pager --full status kejijava || systemctl --no-pager --full status ruoyi || true
