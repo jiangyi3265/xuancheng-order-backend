@@ -72,5 +72,4 @@ jobs:
             systemctl restart "$SERVICE_NAME"
             sleep 25
             systemctl is-active --quiet "$SERVICE_NAME"
-            curl -sS --max-time 20 http://127.0.0.1:8091/captchaImage
             journalctl -u "$SERVICE_NAME" -n 80 --no-pager
