@@ -1,0 +1,76 @@
+name: Restart backend
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_DIR: /www/wwwroot/kejijava
+  SERVICE_NAME: kejijava
+  JAR_NAME: ruoyi-admin.jar
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rewrite service and restart
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_DIR: ${{ env.APP_DIR }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          JAR_NAME: ${{ env.JAR_NAME }}
+          APP_DB_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,APP_DB_PASSWORD
+          command_timeout: 3m
+          script: |
+            set -e
+            for candidate in /usr/lib/jvm/*17* /usr/lib/jvm/*11*; do
+              if [ -x "$candidate/bin/java" ]; then
+                JAVA_BIN="$candidate/bin/java"
+                break
+              fi
+            done
+            [ -n "$JAVA_BIN" ] || JAVA_BIN="$(command -v java)"
+            test -s "$APP_DIR/$JAR_NAME"
+
+            cat > "$APP_DIR/start.sh" <<SCRIPT
+            #!/usr/bin/env bash
+            exec "$JAVA_BIN" -Djava.awt.headless=true -jar "$APP_DIR/$JAR_NAME" \
+              --server.port=8091 \
+              --spring.profiles.active=druid \
+              --ruoyi.profile=/opt/xuancheng/uploadPath \
+              "--spring.datasource.druid.master.url=jdbc:mysql://127.0.0.1:3306/xc_jiedan?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=GMT%2B8" \
+              --spring.datasource.druid.master.username=xc_app \
+              "--spring.datasource.druid.master.password=$APP_DB_PASSWORD"
+            SCRIPT
+            chmod +x "$APP_DIR/start.sh"
+
+            cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
+            [Unit]
+            Description=Xuancheng Order Backend
+            After=network.target
+
+            [Service]
+            Type=simple
+            WorkingDirectory=$APP_DIR
+            ExecStart=$APP_DIR/start.sh
+            SuccessExitStatus=143
+            Restart=always
+            RestartSec=5
+            User=root
+
+            [Install]
+            WantedBy=multi-user.target
+            SERVICE
+
+            systemctl daemon-reload
+            systemctl enable "$SERVICE_NAME"
+            systemctl restart "$SERVICE_NAME"
+            sleep 25
+            systemctl is-active --quiet "$SERVICE_NAME"
+            curl -sS --max-time 20 http://127.0.0.1:8091/captchaImage
+            journalctl -u "$SERVICE_NAME" -n 80 --no-pager
