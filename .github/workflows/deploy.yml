@@ -82,7 +82,7 @@ jobs:
             mv "/tmp/backend-deploy/$JAR_NAME" "$APP_DIR/$JAR_NAME"
             rm -rf /tmp/backend-deploy
 
-            TEMPLATE_PID="$(pgrep -f '/opt/xuancheng/ruoyi-admin.jar' | head -n 1 || true)"
+            TEMPLATE_PID="$(ps -eo pid=,args= | awk '/[j]ava/ && /\/opt\/xuancheng\/ruoyi-admin\.jar/ { print $1; exit }')"
             EXTRA_ARGS_SCRIPT=""
             if [ -n "$TEMPLATE_PID" ] && [ -r "/proc/$TEMPLATE_PID/cmdline" ]; then
               EXTRA_ARGS_SCRIPT="$(python3 - "$TEMPLATE_PID" <<'PY'
@@ -102,6 +102,7 @@ jobs:
             PY
               )"
             fi
+            echo "reused datasource args: $(printf '%s\n' "$EXTRA_ARGS_SCRIPT" | grep -c '^EXTRA_ARGS+=' || true)"
 
             cat > "$APP_DIR/start.sh" <<SCRIPT
             #!/usr/bin/env bash
