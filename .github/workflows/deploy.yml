@@ -59,7 +59,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
           envs: APP_DIR,SERVICE_NAME,JAR_NAME,DOWNLOAD_URL
-          command_timeout: 1m
+          command_timeout: 10m
           script: |
             set -e
             mkdir -p "$APP_DIR"
@@ -71,9 +71,9 @@ jobs:
             SERVICE_NAME="${SERVICE_NAME:-kejijava}"
             JAR_NAME="${JAR_NAME:-ruoyi-admin.jar}"
             DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar}"
-            LOG_FILE="\$APP_DIR/deploy.log"
-            exec >> "\$LOG_FILE" 2>&1
-            echo "==== deploy started at \$(date -Is) ===="
+            LOG_FILE="$APP_DIR/deploy.log"
+            exec >> "$LOG_FILE" 2>&1
+            echo "==== deploy started at $(date -Is) ===="
 
             install_runtime_packages() {
               if command -v apt-get >/dev/null 2>&1; then
@@ -115,14 +115,14 @@ jobs:
             fi
 
             mkdir -p "$APP_DIR"
-            echo "downloading \$DOWNLOAD_URL"
-            curl -fL --retry 20 --retry-delay 10 --connect-timeout 30 --speed-time 120 --speed-limit 1024 -o "\$APP_DIR/\$JAR_NAME.new" "\$DOWNLOAD_URL"
-            test -s "\$APP_DIR/\$JAR_NAME.new"
+            echo "downloading $DOWNLOAD_URL"
+            curl -fL --retry 20 --retry-delay 10 --connect-timeout 30 --speed-time 120 --speed-limit 1024 -o "$APP_DIR/$JAR_NAME.new" "$DOWNLOAD_URL"
+            test -s "$APP_DIR/$JAR_NAME.new"
 
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            mv "\$APP_DIR/\$JAR_NAME.new" "\$APP_DIR/\$JAR_NAME"
+            mv "$APP_DIR/$JAR_NAME.new" "$APP_DIR/$JAR_NAME"
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
@@ -132,7 +132,7 @@ jobs:
             [Service]
             Type=simple
             WorkingDirectory=$APP_DIR
-            ExecStart=$JAVA_BIN -jar $APP_DIR/$JAR_NAME
+            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar $APP_DIR/$JAR_NAME
             SuccessExitStatus=143
             Restart=always
             RestartSec=5
@@ -148,9 +148,9 @@ jobs:
             sleep 5
             systemctl is-active --quiet "$SERVICE_NAME"
             journalctl -u "$SERVICE_NAME" -n 80 --no-pager
-            echo "==== deploy finished at \$(date -Is) ===="
+            echo "==== deploy finished at $(date -Is) ===="
             SCRIPT
 
             chmod +x "$APP_DIR/deploy_from_release.sh"
-            APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" JAR_NAME="$JAR_NAME" DOWNLOAD_URL="$DOWNLOAD_URL" nohup "$APP_DIR/deploy_from_release.sh" >/dev/null 2>&1 &
-            echo "server-side deploy started; log: $APP_DIR/deploy.log"
+            APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" JAR_NAME="$JAR_NAME" DOWNLOAD_URL="$DOWNLOAD_URL" "$APP_DIR/deploy_from_release.sh"
+            tail -n 120 "$APP_DIR/deploy.log"
