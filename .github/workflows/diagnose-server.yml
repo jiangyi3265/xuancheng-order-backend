@@ -49,3 +49,12 @@ jobs:
             PY
             echo "== local curl =="
             curl -sS --max-time 20 http://127.0.0.1:8091/captchaImage || true
+            echo "== mysql access =="
+            if command -v mysql >/dev/null 2>&1; then
+              mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root without password: ok" || echo "mysql root without password: failed"
+              MYSQL_PWD=123456 mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root with 123456: ok" || echo "mysql root with 123456: failed"
+              MYSQL_PWD="${{ secrets.SERVER_PASSWORD }}" mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root with server secret: ok" || echo "mysql root with server secret: failed"
+              mysql -uroot -N -e "show databases like 'xc_jiedan';" 2>/dev/null || true
+            else
+              echo "mysql client not found"
+            fi
