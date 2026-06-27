@@ -41,7 +41,6 @@ jobs:
               MYSQL_SERVICE="$(systemctl list-unit-files | awk '/^(mysqld|mysql|mariadb)\.service/ { print $1; exit }')"
               [ -n "$MYSQL_SERVICE" ] || MYSQL_SERVICE=mysqld.service
               systemctl stop "$MYSQL_SERVICE" || true
-              pkill -f '[m]ysqld.*skip-grant-tables' || true
               nohup mysqld_safe --skip-grant-tables --skip-networking >/tmp/xc-mysqld-safe.log 2>&1 &
               for i in $(seq 1 30); do
                 mysql -uroot -e "select 1" >/dev/null 2>&1 && break
@@ -55,7 +54,7 @@ jobs:
             GRANT ALL PRIVILEGES ON xc_jiedan.* TO 'xc_app'@'localhost';
             FLUSH PRIVILEGES;
             SQL
-              mysqladmin -uroot shutdown || pkill -f '[m]ysqld.*skip-grant-tables' || true
+              mysqladmin -uroot shutdown || true
               systemctl start "$MYSQL_SERVICE"
             fi
 
