@@ -6,9 +6,6 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: deploy-backend
   cancel-in-progress: true
@@ -17,8 +14,6 @@ env:
   APP_DIR: /www/wwwroot/kejijava
   SERVICE_NAME: kejijava
   JAR_NAME: ruoyi-admin.jar
-  RELEASE_TAG: backend-latest
-  DOWNLOAD_URL: https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar
 
 jobs:
   deploy:
@@ -38,54 +33,33 @@ jobs:
       - name: Build jar
         run: mvn -B clean package -DskipTests
 
-      - name: Publish release jar
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          gh release delete "$RELEASE_TAG" --cleanup-tag --yes || true
-          gh release create "$RELEASE_TAG" "ruoyi-admin/target/$JAR_NAME#$JAR_NAME" --title "Backend latest" --notes "Automated backend build from $GITHUB_SHA" --latest=false
-
-      - name: Start server-side deploy
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          APP_DIR: ${{ env.APP_DIR }}
-          SERVICE_NAME: ${{ env.SERVICE_NAME }}
-          JAR_NAME: ${{ env.JAR_NAME }}
-          DOWNLOAD_URL: ${{ env.DOWNLOAD_URL }}
+      - name: Upload jar
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME,DOWNLOAD_URL
-          command_timeout: 10m
+          source: ruoyi-admin/target/ruoyi-admin.jar
+          target: /tmp/backend-deploy
+          strip_components: 2
+          overwrite: true
+
+      - name: Restart backend
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_DIR: ${{ env.APP_DIR }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          JAR_NAME: ${{ env.JAR_NAME }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME
+          command_timeout: 5m
           script: |
             set -e
-            mkdir -p "$APP_DIR"
-
-            cat > "$APP_DIR/deploy_from_release.sh" <<'SCRIPT'
-            #!/usr/bin/env bash
-            set -e
-            APP_DIR="${APP_DIR:-/www/wwwroot/kejijava}"
-            SERVICE_NAME="${SERVICE_NAME:-kejijava}"
-            JAR_NAME="${JAR_NAME:-ruoyi-admin.jar}"
-            DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/jiangyi3265/xuancheng-order-backend/releases/download/backend-latest/ruoyi-admin.jar}"
-            LOG_FILE="$APP_DIR/deploy.log"
-            exec >> "$LOG_FILE" 2>&1
-            echo "==== deploy started at $(date -Is) ===="
-
-            install_runtime_packages() {
-              if command -v apt-get >/dev/null 2>&1; then
-                apt-get update
-                DEBIAN_FRONTEND=noninteractive apt-get install -y curl openjdk-17-jdk
-              elif command -v yum >/dev/null 2>&1; then
-                yum install -y curl java-17-openjdk-devel || yum install -y curl java-17-konajdk-devel || yum install -y curl java-11-openjdk-devel
-              else
-                echo "unsupported package manager; install curl and Java 11+ manually"
-                exit 1
-              fi
-            }
 
             configure_java() {
               for candidate in /usr/lib/jvm/*17* /usr/lib/jvm/*11*; do
@@ -98,31 +72,15 @@ jobs:
               JAVA_BIN="$(command -v java)"
             }
 
-            if ! command -v curl >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
-              install_runtime_packages
-            fi
             configure_java
-            JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
-            if [ "$JAVA_MAJOR" -lt 11 ]; then
-              install_runtime_packages
-              configure_java
-              JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ { print $2 == "1" ? $3 : $2 }')"
-            fi
-            if [ "$JAVA_MAJOR" -lt 11 ]; then
-              echo "Java 11 or newer is required on the server"
-              java -version
-              exit 1
-            fi
-
             mkdir -p "$APP_DIR"
-            echo "downloading $DOWNLOAD_URL"
-            curl -fL --retry 20 --retry-delay 10 --connect-timeout 30 --speed-time 120 --speed-limit 1024 -o "$APP_DIR/$JAR_NAME.new" "$DOWNLOAD_URL"
-            test -s "$APP_DIR/$JAR_NAME.new"
+            test -s "/tmp/backend-deploy/$JAR_NAME"
 
             if [ -f "$APP_DIR/$JAR_NAME" ]; then
               cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             fi
-            mv "$APP_DIR/$JAR_NAME.new" "$APP_DIR/$JAR_NAME"
+            mv "/tmp/backend-deploy/$JAR_NAME" "$APP_DIR/$JAR_NAME"
+            rm -rf /tmp/backend-deploy
 
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
@@ -145,12 +103,7 @@ jobs:
             systemctl daemon-reload
             systemctl enable "$SERVICE_NAME"
             systemctl restart "$SERVICE_NAME"
-            sleep 5
+            sleep 15
             systemctl is-active --quiet "$SERVICE_NAME"
-            journalctl -u "$SERVICE_NAME" -n 80 --no-pager
-            echo "==== deploy finished at $(date -Is) ===="
-            SCRIPT
-
-            chmod +x "$APP_DIR/deploy_from_release.sh"
-            APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" JAR_NAME="$JAR_NAME" DOWNLOAD_URL="$DOWNLOAD_URL" "$APP_DIR/deploy_from_release.sh"
-            tail -n 120 "$APP_DIR/deploy.log"
+            systemctl --no-pager --full status "$SERVICE_NAME"
+            journalctl -u "$SERVICE_NAME" -n 120 --no-pager
