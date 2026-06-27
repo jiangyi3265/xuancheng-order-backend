@@ -102,6 +102,33 @@ jobs:
             PY
               )"
             fi
+            if [ -r "/opt/xuancheng/ruoyi-admin.jar" ]; then
+              EXTRA_ARGS_SCRIPT="$EXTRA_ARGS_SCRIPT
+            $(python3 - <<'PY'
+            import re
+            import shlex
+            import zipfile
+
+            with zipfile.ZipFile('/opt/xuancheng/ruoyi-admin.jar', 'r') as jar:
+                text = jar.read('BOOT-INF/classes/application-druid.yml').decode('utf-8', 'ignore')
+
+            match = re.search(r'^\s*master:\s*$(.*?)(?=^\s*slave:)', text, re.M | re.S)
+            section = match.group(1) if match else text
+            keys = {
+                'url': 'spring.datasource.druid.master.url',
+                'username': 'spring.datasource.druid.master.username',
+                'password': 'spring.datasource.druid.master.password',
+            }
+
+            for source_key, target_key in keys.items():
+                found = re.search(rf'^\s*{source_key}:\s*(.*?)\s*$', section, re.M)
+                if found:
+                    value = found.group(1).strip().strip('"').strip("'")
+                    if value:
+                        print(f'EXTRA_ARGS+=({shlex.quote("--" + target_key + "=" + value)})')
+            PY
+              )"
+            fi
             echo "reused datasource args: $(printf '%s\n' "$EXTRA_ARGS_SCRIPT" | grep -c '^EXTRA_ARGS+=' || true)"
 
             cat > "$APP_DIR/start.sh" <<SCRIPT
