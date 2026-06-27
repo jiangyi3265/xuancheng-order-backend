@@ -69,7 +69,14 @@ jobs:
 
             systemctl daemon-reload
             systemctl enable "$SERVICE_NAME"
-            systemctl restart "$SERVICE_NAME"
+            OLD_PID="$(systemctl show -p MainPID --value "$SERVICE_NAME" || true)"
+            timeout 20s systemctl stop "$SERVICE_NAME" || true
+            if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+              kill -TERM "$OLD_PID" || true
+              sleep 5
+              kill -KILL "$OLD_PID" || true
+            fi
+            timeout 30s systemctl start "$SERVICE_NAME"
             sleep 25
             systemctl is-active --quiet "$SERVICE_NAME"
             journalctl -u "$SERVICE_NAME" -n 80 --no-pager
