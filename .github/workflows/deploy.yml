@@ -82,6 +82,36 @@ jobs:
             mv "/tmp/backend-deploy/$JAR_NAME" "$APP_DIR/$JAR_NAME"
             rm -rf /tmp/backend-deploy
 
+            TEMPLATE_PID="$(pgrep -f '/opt/xuancheng/ruoyi-admin.jar' | head -n 1 || true)"
+            EXTRA_ARGS_SCRIPT=""
+            if [ -n "$TEMPLATE_PID" ] && [ -r "/proc/$TEMPLATE_PID/cmdline" ]; then
+              EXTRA_ARGS_SCRIPT="$(python3 - "$TEMPLATE_PID" <<'PY'
+            import shlex
+            import sys
+
+            pid = sys.argv[1]
+            with open(f'/proc/{pid}/cmdline', 'rb') as fh:
+                args = [part.decode('utf-8', 'ignore') for part in fh.read().split(b'\0') if part]
+
+            prefixes = ('--spring.', '--ruoyi.profile=')
+            for arg in args:
+                if arg.startswith('--server.port='):
+                    continue
+                if arg.startswith(prefixes):
+                    print(f'EXTRA_ARGS+=({shlex.quote(arg)})')
+            PY
+              )"
+            fi
+
+            cat > "$APP_DIR/start.sh" <<SCRIPT
+            #!/usr/bin/env bash
+            set -e
+            EXTRA_ARGS=()
+            $EXTRA_ARGS_SCRIPT
+            exec "$JAVA_BIN" -Djava.awt.headless=true -jar "$APP_DIR/$JAR_NAME" --server.port=8091 "\${EXTRA_ARGS[@]}"
+            SCRIPT
+            chmod +x "$APP_DIR/start.sh"
+
             cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SERVICE
             [Unit]
             Description=Xuancheng Order Backend
@@ -90,7 +120,7 @@ jobs:
             [Service]
             Type=simple
             WorkingDirectory=$APP_DIR
-            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar $APP_DIR/$JAR_NAME --server.port=8091
+            ExecStart=$APP_DIR/start.sh
             SuccessExitStatus=143
             Restart=always
             RestartSec=5
@@ -105,5 +135,4 @@ jobs:
             systemctl restart "$SERVICE_NAME"
             sleep 15
             systemctl is-active --quiet "$SERVICE_NAME"
-            systemctl --no-pager --full status "$SERVICE_NAME"
-            journalctl -u "$SERVICE_NAME" -n 120 --no-pager
+            journalctl -u "$SERVICE_NAME" -n 80 --no-pager
