@@ -37,7 +37,7 @@ jobs:
             [Service]
             Type=simple
             WorkingDirectory=/www/wwwroot/kejijava
-            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar /www/wwwroot/kejijava/ruoyi-admin.jar
+            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar /www/wwwroot/kejijava/ruoyi-admin.jar --server.port=8091
             SuccessExitStatus=143
             Restart=always
             RestartSec=5

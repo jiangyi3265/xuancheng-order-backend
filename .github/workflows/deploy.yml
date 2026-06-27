@@ -90,7 +90,7 @@ jobs:
             [Service]
             Type=simple
             WorkingDirectory=$APP_DIR
-            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar $APP_DIR/$JAR_NAME
+            ExecStart=$JAVA_BIN -Djava.awt.headless=true -jar $APP_DIR/$JAR_NAME --server.port=8091
             SuccessExitStatus=143
             Restart=always
             RestartSec=5

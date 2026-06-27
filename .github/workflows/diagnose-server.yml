@@ -23,7 +23,7 @@ jobs:
             echo "== java processes =="
             ps -ef | grep '[j]ava' || true
             echo "== listeners =="
-            ss -ltnp | grep -E ':80|:8080|:8081' || true
+            ss -ltnp | grep -E ':80|:8080|:8081|:8091' || true
             echo "== jar files =="
             ls -lh /www/wwwroot/kejijava || true
             sha256sum /www/wwwroot/kejijava/ruoyi-admin.jar || true
@@ -48,4 +48,4 @@ jobs:
                 print('config class mentions sys.account.captchaEnabled:', b'sys.account.captchaEnabled' in config)
             PY
             echo "== local curl =="
-            curl -sS --max-time 20 http://127.0.0.1:8080/captchaImage || true
+            curl -sS --max-time 20 http://127.0.0.1:8091/captchaImage || true
