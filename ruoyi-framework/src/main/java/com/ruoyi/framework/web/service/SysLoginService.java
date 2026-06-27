@@ -109,7 +109,7 @@ public class SysLoginService
      */
     public void validateCaptcha(String username, String code, String uuid)
     {
-        boolean captchaEnabled = configService.selectCaptchaEnabled();
+        boolean captchaEnabled = false;
         if (captchaEnabled)
         {
             String verifyKey = CacheConstants.CAPTCHA_CODE_KEY + StringUtils.nvl(uuid, "");

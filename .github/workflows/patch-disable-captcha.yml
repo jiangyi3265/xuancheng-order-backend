@@ -18,20 +18,23 @@ jobs:
           java-version: 17
           cache: maven
 
-      - name: Build patched class
+      - name: Build patched artifacts
         run: |
-          mvn -B -pl ruoyi-system -am package -DskipTests
+          mvn -B -pl ruoyi-admin -am package -DskipTests
           mkdir -p patch/BOOT-INF/lib
+          mkdir -p patch/BOOT-INF/classes/com/ruoyi/web/controller/common
           cp ruoyi-system/target/ruoyi-system-3.9.1.jar patch/BOOT-INF/lib/
+          cp ruoyi-framework/target/ruoyi-framework-3.9.1.jar patch/BOOT-INF/lib/
+          cp ruoyi-admin/target/classes/com/ruoyi/web/controller/common/CaptchaController.class patch/BOOT-INF/classes/com/ruoyi/web/controller/common/
 
-      - name: Upload patched jar
+      - name: Upload patched artifacts
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          source: patch/BOOT-INF/lib/ruoyi-system-3.9.1.jar
+          source: patch/BOOT-INF/lib/ruoyi-system-3.9.1.jar,patch/BOOT-INF/lib/ruoyi-framework-3.9.1.jar,patch/BOOT-INF/classes/com/ruoyi/web/controller/common/CaptchaController.class
           target: /tmp/captcha-patch
           strip_components: 1
           overwrite: true
@@ -53,22 +56,27 @@ jobs:
 
             app = '/www/wwwroot/kejijava/ruoyi-admin.jar'
             tmp = app + '.patched'
-            entry = 'BOOT-INF/lib/ruoyi-system-3.9.1.jar'
-            replacement = '/tmp/captcha-patch/' + entry
+            replacements = {
+                'BOOT-INF/lib/ruoyi-system-3.9.1.jar': '/tmp/captcha-patch/BOOT-INF/lib/ruoyi-system-3.9.1.jar',
+                'BOOT-INF/lib/ruoyi-framework-3.9.1.jar': '/tmp/captcha-patch/BOOT-INF/lib/ruoyi-framework-3.9.1.jar',
+                'BOOT-INF/classes/com/ruoyi/web/controller/common/CaptchaController.class': '/tmp/captcha-patch/BOOT-INF/classes/com/ruoyi/web/controller/common/CaptchaController.class',
+            }
 
-            if not os.path.exists(replacement):
-                raise SystemExit(f'missing replacement: {replacement}')
+            for replacement in replacements.values():
+                if not os.path.exists(replacement):
+                    raise SystemExit(f'missing replacement: {replacement}')
 
             with zipfile.ZipFile(app, 'r') as zin, zipfile.ZipFile(tmp, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
-                replaced = False
+                replaced = set()
                 for item in zin.infolist():
-                    if item.filename == entry:
-                        zout.write(replacement, entry)
-                        replaced = True
+                    if item.filename in replacements:
+                        zout.write(replacements[item.filename], item.filename)
+                        replaced.add(item.filename)
                     else:
                         zout.writestr(item, zin.read(item.filename))
-                if not replaced:
-                    zout.write(replacement, entry)
+                for entry, replacement in replacements.items():
+                    if entry not in replaced:
+                        zout.write(replacement, entry)
 
             shutil.copy2(app, app + '.bak')
             os.replace(tmp, app)
