@@ -20,6 +20,7 @@ jobs:
             echo "== service =="
             systemctl --no-pager --full status kejijava || true
             systemctl --no-pager cat kejijava || true
+            journalctl -u kejijava -n 180 --no-pager || true
             echo "== java processes =="
             ps -ef | grep '[j]ava' || true
             echo "== listeners =="
@@ -57,6 +58,7 @@ jobs:
               mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root without password: ok" || echo "mysql root without password: failed"
               MYSQL_PWD=123456 mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root with 123456: ok" || echo "mysql root with 123456: failed"
               MYSQL_PWD="${{ secrets.SERVER_PASSWORD }}" mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root with server secret: ok" || echo "mysql root with server secret: failed"
+              MYSQL_PWD="${{ secrets.SERVER_PASSWORD }}" mysql -uxc_app -D xc_jiedan -e "select 1;" >/dev/null 2>&1 && echo "mysql xc_app with server secret: ok" || echo "mysql xc_app with server secret: failed"
               mysql -uroot -N -e "show databases like 'xc_jiedan';" 2>/dev/null || true
             else
               echo "mysql client not found"
