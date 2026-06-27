@@ -1,0 +1,27 @@
+name: Debug backend
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect backend without HTTP calls
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          command_timeout: 2m
+          script: |
+            set -e
+            systemctl --no-pager --full status kejijava || true
+            ss -ltnp | grep -E ':8091|:3306|:6379' || true
+            PID="$(systemctl show -p MainPID --value kejijava || true)"
+            if [ -n "$PID" ] && [ "$PID" != "0" ]; then
+              ps -o pid,ppid,stat,etime,cmd -p "$PID" || true
+              jcmd "$PID" Thread.print | head -n 260 || true
+            fi
+            journalctl -u kejijava -n 220 --no-pager || true
