@@ -25,8 +25,11 @@ jobs:
               mysql "$@" <<SQL
             CREATE DATABASE IF NOT EXISTS xc_jiedan DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
             CREATE USER IF NOT EXISTS 'xc_app'@'localhost' IDENTIFIED BY '${APP_DB_PASSWORD}';
+            CREATE USER IF NOT EXISTS 'xc_app'@'127.0.0.1' IDENTIFIED BY '${APP_DB_PASSWORD}';
             ALTER USER 'xc_app'@'localhost' IDENTIFIED BY '${APP_DB_PASSWORD}';
+            ALTER USER 'xc_app'@'127.0.0.1' IDENTIFIED BY '${APP_DB_PASSWORD}';
             GRANT ALL PRIVILEGES ON xc_jiedan.* TO 'xc_app'@'localhost';
+            GRANT ALL PRIVILEGES ON xc_jiedan.* TO 'xc_app'@'127.0.0.1';
             FLUSH PRIVILEGES;
             SQL
             }
@@ -50,13 +53,19 @@ jobs:
             FLUSH PRIVILEGES;
             CREATE DATABASE IF NOT EXISTS xc_jiedan DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
             CREATE USER IF NOT EXISTS 'xc_app'@'localhost' IDENTIFIED BY '${APP_DB_PASSWORD}';
+            CREATE USER IF NOT EXISTS 'xc_app'@'127.0.0.1' IDENTIFIED BY '${APP_DB_PASSWORD}';
             ALTER USER 'xc_app'@'localhost' IDENTIFIED BY '${APP_DB_PASSWORD}';
+            ALTER USER 'xc_app'@'127.0.0.1' IDENTIFIED BY '${APP_DB_PASSWORD}';
             GRANT ALL PRIVILEGES ON xc_jiedan.* TO 'xc_app'@'localhost';
+            GRANT ALL PRIVILEGES ON xc_jiedan.* TO 'xc_app'@'127.0.0.1';
             FLUSH PRIVILEGES;
             SQL
               mysqladmin -uroot shutdown || true
               systemctl start "$MYSQL_SERVICE"
             fi
 
+            systemctl restart mysqld || systemctl restart mysql || systemctl restart mariadb || true
+            sleep 5
             MYSQL_PWD="$APP_DB_PASSWORD" mysql -uxc_app -D xc_jiedan -e "select 1" >/dev/null
+            MYSQL_PWD="$APP_DB_PASSWORD" mysql -h127.0.0.1 -P3306 -uxc_app -D xc_jiedan -e "select 1" >/dev/null
             echo "xc_app database access ok"

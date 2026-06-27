@@ -131,6 +131,7 @@ jobs:
               )"
             fi
             EXTRA_ARGS_SCRIPT="$EXTRA_ARGS_SCRIPT
+            EXTRA_ARGS+=(--spring.datasource.druid.master.url=jdbc:mysql://127.0.0.1:3306/xc_jiedan?useUnicode=true\\&characterEncoding=utf8\\&zeroDateTimeBehavior=convertToNull\\&useSSL=false\\&serverTimezone=GMT%2B8)
             EXTRA_ARGS+=(--spring.datasource.druid.master.username=xc_app)
             EXTRA_ARGS+=(--spring.datasource.druid.master.password=$(printf '%q' "$APP_DB_PASSWORD"))"
             echo "reused datasource args: $(printf '%s\n' "$EXTRA_ARGS_SCRIPT" | grep -c '^EXTRA_ARGS+=' || true)"
