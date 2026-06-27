@@ -49,6 +49,9 @@ jobs:
             PY
             echo "== local curl =="
             curl -sS --max-time 20 http://127.0.0.1:8091/captchaImage || true
+            echo "== existing xuancheng curl =="
+            curl -sS --max-time 20 http://127.0.0.1:8090/captchaImage || true
+            curl -sS --max-time 20 -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123"}' http://127.0.0.1:8090/login || true
             echo "== mysql access =="
             if command -v mysql >/dev/null 2>&1; then
               mysql -uroot -e "select 1;" >/dev/null 2>&1 && echo "mysql root without password: ok" || echo "mysql root without password: failed"
