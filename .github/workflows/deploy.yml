@@ -51,12 +51,13 @@ jobs:
           APP_DIR: ${{ env.APP_DIR }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
+          APP_DB_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,APP_DB_PASSWORD
           command_timeout: 5m
           script: |
             set -e
@@ -129,6 +130,9 @@ jobs:
             PY
               )"
             fi
+            EXTRA_ARGS_SCRIPT="$EXTRA_ARGS_SCRIPT
+            EXTRA_ARGS+=(--spring.datasource.druid.master.username=xc_app)
+            EXTRA_ARGS+=(--spring.datasource.druid.master.password=$(printf '%q' "$APP_DB_PASSWORD"))"
             echo "reused datasource args: $(printf '%s\n' "$EXTRA_ARGS_SCRIPT" | grep -c '^EXTRA_ARGS+=' || true)"
 
             cat > "$APP_DIR/start.sh" <<SCRIPT
