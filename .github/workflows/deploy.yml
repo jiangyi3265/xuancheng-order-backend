@@ -157,6 +157,19 @@ jobs:
                '0', '0', '', NULL, 'admin', NOW(), '', NULL, '演示客户账号');
 
             INSERT IGNORE INTO sys_user_role (user_id, role_id) VALUES (2, 2), (101, 2), (102, 2);
+            INSERT IGNORE INTO sys_user_role (user_id, role_id)
+              SELECT user_id, 2 FROM sys_user WHERE user_name IN ('customer', 'laowang', 'hailan');
+
+            UPDATE sys_user
+              SET nick_name = CASE user_name
+                    WHEN 'customer' THEN CONVERT(0xE5AEA2E688B7E8B4A6E58FB7 USING utf8mb4)
+                    WHEN 'laowang' THEN CONVERT(0xE88081E78E8BE9A490E9A5AE USING utf8mb4)
+                    WHEN 'hailan' THEN CONVERT(0xE6B5B7E8939DE7A791E68A80 USING utf8mb4)
+                  END,
+                  password = '$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK',
+                  status = '0',
+                  del_flag = '0'
+              WHERE user_name IN ('customer', 'laowang', 'hailan');
 
             UPDATE jiedan_order
               SET customer_account = 'laowang'
