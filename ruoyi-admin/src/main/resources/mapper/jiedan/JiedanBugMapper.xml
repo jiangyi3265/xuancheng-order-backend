@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanBugMapper">
+
+    <resultMap id="JiedanBugResult" type="com.ruoyi.jiedan.domain.JiedanBug">
+        <id     property="id"          column="id"          />
+        <result property="orderId"     column="order_id"    />
+        <result property="content"     column="content"     />
+        <result property="attachments" column="attachments" />
+        <result property="createdBy"   column="created_by"  />
+        <result property="createTime"  column="create_time" />
+    </resultMap>
+
+    <sql id="cols">
+        id, order_id, content, attachments, created_by, create_time
+    </sql>
+
+    <select id="selectByOrderId" parameterType="Long" resultMap="JiedanBugResult">
+        select <include refid="cols"/> from jiedan_bug where order_id = #{orderId} order by id desc
+    </select>
+
+    <select id="selectById" parameterType="Long" resultMap="JiedanBugResult">
+        select <include refid="cols"/> from jiedan_bug where id = #{id}
+    </select>
+
+    <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBug" useGeneratedKeys="true" keyProperty="id">
+        insert into jiedan_bug (order_id, content, attachments, created_by, create_time)
+        values (#{orderId}, #{content}, #{attachments}, #{createdBy}, #{createTime})
+    </insert>
+
+    <delete id="deleteById" parameterType="Long">
+        delete from jiedan_bug where id = #{id}
+    </delete>
+
+    <delete id="deleteByOrderId" parameterType="Long">
+        delete from jiedan_bug where order_id = #{orderId}
+    </delete>
+
+</mapper>

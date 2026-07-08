@@ -66,6 +66,24 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success();
     }
 
+    @PostMapping("/bug")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult bug(@RequestBody Map<String, Object> body)
+    {
+        Map<String, Object> vo = service.createBug(body);
+        if (vo == null) return AjaxResult.error("Bug 内容不能为空或订单不存在");
+        return AjaxResult.success(vo);
+    }
+
+    @DeleteMapping("/bug/{id}")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult removeBug(@PathVariable Long id)
+    {
+        Map<String, Object> vo = service.deleteBug(id);
+        if (vo == null) return AjaxResult.error("Bug 不存在");
+        return AjaxResult.success(vo);
+    }
+
     @GetMapping("/notes/{id}")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult getNotes(@PathVariable Long id)

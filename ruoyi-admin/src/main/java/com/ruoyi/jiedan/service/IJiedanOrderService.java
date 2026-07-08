@@ -27,6 +27,14 @@ public interface IJiedanOrderService
 
     boolean deleteForCustomer(Long id, String account);
 
+    Map<String, Object> createBug(Map<String, Object> payload);
+
+    Map<String, Object> deleteBug(Long bugId);
+
+    Map<String, Object> createBugForCustomer(Map<String, Object> payload, String account, String customerName);
+
+    Map<String, Object> deleteBugForCustomer(Long bugId, String account);
+
     /** 项目记事本：读取（内部使用） */
     Map<String, Object> getNotes(Long id);
 

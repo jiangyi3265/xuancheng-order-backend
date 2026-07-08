@@ -57,6 +57,24 @@ public class JiedanPortalController extends BaseController
         return AjaxResult.success();
     }
 
+    /** 客户在项目内快速创建 Bug，独立于聊天记录。 */
+    @PostMapping("/bug")
+    public AjaxResult bug(@RequestBody Map<String, Object> body)
+    {
+        Map<String, Object> vo = service.createBugForCustomer(body, SecurityUtils.getUsername(), nickName());
+        if (vo == null) return AjaxResult.error("Bug 内容不能为空或项目不存在");
+        return AjaxResult.success(vo);
+    }
+
+    /** 客户删除自己项目下的 Bug。 */
+    @DeleteMapping("/bug/{id}")
+    public AjaxResult removeBug(@PathVariable Long id)
+    {
+        Map<String, Object> vo = service.deleteBugForCustomer(id, SecurityUtils.getUsername());
+        if (vo == null) return AjaxResult.error("Bug 不存在或无权删除");
+        return AjaxResult.success(vo);
+    }
+
     /** 发送留言（content + attachments[图片/视频/语音]） */
     @PostMapping("/message")
     public AjaxResult message(@RequestBody Map<String, Object> body)
