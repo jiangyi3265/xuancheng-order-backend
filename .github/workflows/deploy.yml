@@ -153,6 +153,17 @@ jobs:
               KEY idx_jiedan_bug_order_id (order_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+            CREATE TABLE IF NOT EXISTS jiedan_bug_update (
+              id BIGINT(20) NOT NULL AUTO_INCREMENT,
+              bug_id BIGINT(20) NOT NULL,
+              content TEXT NULL,
+              attachments LONGTEXT NULL,
+              created_by VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT '',
+              create_time DATETIME DEFAULT NULL,
+              PRIMARY KEY (id),
+              KEY idx_jiedan_bug_update_bug_id (bug_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
             INSERT IGNORE INTO sys_user
               (user_id, dept_id, user_name, nick_name, user_type, email, phonenumber, sex, avatar, password,
                status, del_flag, login_ip, login_date, create_by, create_time, update_by, update_time, remark)

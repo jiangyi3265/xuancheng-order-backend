@@ -75,6 +75,15 @@ public class JiedanPortalController extends BaseController
         return AjaxResult.success(vo);
     }
 
+    /** 客户在同一条 Bug 下追加 QA / 变更。 */
+    @PostMapping("/bug/{id}/update")
+    public AjaxResult bugUpdate(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        Map<String, Object> vo = service.addBugUpdateForCustomer(id, body, SecurityUtils.getUsername(), nickName());
+        if (vo == null) return AjaxResult.error("追加内容不能为空或 Bug 不存在");
+        return AjaxResult.success(vo);
+    }
+
     /** 发送留言（content + attachments[图片/视频/语音]） */
     @PostMapping("/message")
     public AjaxResult message(@RequestBody Map<String, Object> body)

@@ -16,10 +16,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.alibaba.fastjson2.JSON;
 import com.ruoyi.jiedan.domain.JiedanBug;
+import com.ruoyi.jiedan.domain.JiedanBugUpdate;
 import com.ruoyi.jiedan.domain.JiedanOrder;
 import com.ruoyi.jiedan.domain.JiedanSetting;
 import com.ruoyi.jiedan.domain.JiedanTimeline;
 import com.ruoyi.jiedan.mapper.JiedanBugMapper;
+import com.ruoyi.jiedan.mapper.JiedanBugUpdateMapper;
 import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
 import com.ruoyi.jiedan.mapper.JiedanSettingMapper;
 import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
@@ -37,6 +39,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanBugMapper bugMapper;
+
+    @Autowired
+    private JiedanBugUpdateMapper bugUpdateMapper;
 
     @Autowired
     private JiedanSettingMapper settingMapper;
@@ -198,6 +203,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public void delete(Long id)
     {
+        bugUpdateMapper.deleteByOrderId(id);
         bugMapper.deleteByOrderId(id);
         timelineMapper.deleteByOrderId(id);
         orderMapper.deleteById(id);
@@ -238,8 +244,28 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         JiedanBug bug = bugMapper.selectById(bugId);
         if (bug == null) return null;
         Long orderId = bug.getOrderId();
+        bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         return getVO(orderId);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> addBugUpdate(Long bugId, Map<String, Object> p)
+    {
+        JiedanBug bug = bugMapper.selectById(bugId);
+        if (bug == null) return null;
+        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
+        if (o == null) return null;
+        if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
+
+        Long by = asLong(p.get("byMemberId"));
+        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        Date now = new Date();
+        insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
+        touchUnread(o.getId(), by, now);
+        pushOthers(by, "Bug 追加 QA", o.getTitle() + dash(byName));
+        return getVO(o.getId());
     }
 
     @Override
@@ -272,7 +298,31 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (bug == null) return null;
         JiedanOrder o = orderMapper.selectById(bug.getOrderId());
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
+        bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
+        return getForCustomer(o.getId(), account);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> addBugUpdateForCustomer(Long bugId, Map<String, Object> p, String account, String customerName)
+    {
+        JiedanBug bug = bugMapper.selectById(bugId);
+        if (bug == null) return null;
+        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
+        if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
+
+        Date now = new Date();
+        String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
+        insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
+
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(o.getId());
+        upd.setUnread(join(MEMBER_IDS));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+        pushOthers(null, "客户追加 Bug QA", o.getTitle() + dash(name));
         return getForCustomer(o.getId(), account);
     }
 
@@ -504,6 +554,17 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugMapper.insert(bug);
     }
 
+    private void insertBugUpdate(Long bugId, String user, String content, Object attachments, Date time)
+    {
+        JiedanBugUpdate update = new JiedanBugUpdate();
+        update.setBugId(bugId);
+        update.setContent(content);
+        update.setAttachments(jsonStr(attachments));
+        update.setCreatedBy(user);
+        update.setCreateTime(time);
+        bugUpdateMapper.insert(update);
+    }
+
     private void touchUnread(Long orderId, Long by, Date now)
     {
         JiedanOrder upd = new JiedanOrder();
@@ -545,6 +606,20 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("attachments", parseArr(b.getAttachments()));
             bm.put("createdBy", b.getCreatedBy());
             bm.put("time", fmt(b.getCreateTime()));
+
+            List<Map<String, Object>> updates = new ArrayList<>();
+            for (JiedanBugUpdate u : bugUpdateMapper.selectByBugId(b.getId()))
+            {
+                Map<String, Object> um = new LinkedHashMap<>();
+                um.put("id", u.getId());
+                um.put("bugId", u.getBugId());
+                um.put("content", u.getContent());
+                um.put("attachments", parseArr(u.getAttachments()));
+                um.put("createdBy", u.getCreatedBy());
+                um.put("time", fmt(u.getCreateTime()));
+                updates.add(um);
+            }
+            bm.put("updates", updates);
             bugs.add(bm);
         }
         vo.put("bugs", bugs);
