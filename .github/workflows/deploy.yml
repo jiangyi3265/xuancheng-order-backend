@@ -31,7 +31,7 @@ jobs:
         run: mvn -B clean package -DskipTests
 
       - name: Upload jar
-        timeout-minutes: 15
+        timeout-minutes: 120
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
@@ -52,10 +52,10 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=10 \
             "$SERVER_USER@$SERVER_HOST" \
-            "rm -rf /tmp/backend-deploy && mkdir -p /tmp/backend-deploy"
+            "mkdir -p /tmp/backend-deploy && if [ -s '$APP_DIR/$JAR_NAME' ]; then cp '$APP_DIR/$JAR_NAME' '/tmp/backend-deploy/$JAR_NAME'; else rm -f '/tmp/backend-deploy/$JAR_NAME'; fi"
 
           sshpass -e rsync \
-            -avz --progress --partial \
+            -av --progress --partial --inplace --no-whole-file \
             -e "ssh -p $SERVER_PORT -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10" \
             ruoyi-admin/target/ruoyi-admin.jar \
             "$SERVER_USER@$SERVER_HOST:/tmp/backend-deploy/$JAR_NAME"
