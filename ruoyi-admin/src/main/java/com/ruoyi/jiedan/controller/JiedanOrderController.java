@@ -66,6 +66,20 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success();
     }
 
+    @GetMapping("/notes/{id}")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult getNotes(@PathVariable Long id)
+    {
+        return AjaxResult.success(service.getNotes(id));
+    }
+
+    @PutMapping("/notes")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult saveNotes(@RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.saveNotes(body));
+    }
+
     @PostMapping("/progress")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult progress(@RequestBody Map<String, Object> body)
@@ -110,6 +124,7 @@ public class JiedanOrderController extends BaseController
         String username = SecurityUtils.getUsername();
         body.put("channel", "form");
         body.put("status", "pending");
+        body.put("customerAccount", username);
         body.remove("byMemberId");
         if (StringUtils.isEmpty((String) body.get("customer")))
         {

@@ -28,6 +28,7 @@ CREATE TABLE `jiedan_order` (
   `title` varchar(255) NOT NULL COMMENT '项目名',
   `channel` varchar(20) DEFAULT 'wechat' COMMENT '来源渠道',
   `customer` varchar(100) DEFAULT '' COMMENT '客户',
+  `customer_account` varchar(64) DEFAULT '' COMMENT '归属客户账号(sys_user.user_name)',
   `contact` varchar(100) DEFAULT '' COMMENT '联系方式',
   `amount` decimal(12,2) DEFAULT '0.00' COMMENT '报价',
   `owner_id` bigint DEFAULT NULL COMMENT '负责人(成员id)',
@@ -36,6 +37,8 @@ CREATE TABLE `jiedan_order` (
   `deadline` varchar(20) DEFAULT '' COMMENT '截止日期',
   `requirement` text COMMENT '需求描述',
   `attachments` longtext COMMENT '需求材料(JSON)',
+  `notes` longtext COMMENT '项目记事本正文(内部)',
+  `note_attachments` longtext COMMENT '记事本附件(JSON,内部)',
   `unread` varchar(50) DEFAULT '' COMMENT '未读成员(逗号分隔)',
   `paid` tinyint(1) DEFAULT '0' COMMENT '是否收款',
   `revisions` int DEFAULT '0' COMMENT '改稿次数',
@@ -51,7 +54,7 @@ CREATE TABLE `jiedan_order` (
 
 LOCK TABLES `jiedan_order` WRITE;
 /*!40000 ALTER TABLE `jiedan_order` DISABLE KEYS */;
-INSERT INTO `jiedan_order` VALUES (1,'XC-2026-0001','餐饮门店点餐小程序','taobao','老王餐饮','wx:laowang888',6800.00,2,'doing','high','2026-06-24','微信小程序点餐+后台订单管理，含堂食/外带，需对接微信支付。',NULL,'',0,0,'2026-06-14 10:48:46','2026-06-20 10:48:46'),(2,'XC-2026-0002','企业官网改版（响应式）','wechat','海蓝科技','wx:hailan_tech',4200.00,2,'review','medium','2026-06-21','5个页面官网改版，适配手机端，提供源码。',NULL,'1',0,0,'2026-06-08 10:48:46','2026-06-20 10:48:46'),(3,'XC-2026-0003','Python 数据爬取脚本','xianyu','研究生小李','wx:lxiaoli',900.00,2,'doing','medium','2026-06-19','爬取电商商品数据导出 Excel，带定时任务。',NULL,'',0,0,'2026-06-16 10:48:46','2026-06-20 10:48:46'),(4,'XC-2026-0004','毕业设计：图书管理系统','taobao','学生客户','wx:book_sys',1500.00,2,'pending','low','2026-07-10','SpringBoot+Vue 图书管理系统，含论文初稿。',NULL,'2',0,0,'2026-06-19 10:48:46','2026-06-20 10:48:46'),(5,'XC-2026-0005','小程序 Bug 修复（紧急）','wechat','老客户·张总','wx:zhangzong',600.00,2,'pending','high','2026-06-22','线上小程序登录偶发失败，需尽快定位修复。',NULL,'2',0,0,'2026-06-20 10:48:46','2026-06-20 10:48:46'),(6,'XC-2026-0006','后台管理系统二次开发','taobao','云图信息','wx:yuntu',9500.00,2,'done','medium','2026-06-17','基于若依新增3个业务模块，含权限配置。',NULL,'',1,0,'2026-05-26 10:48:46','2026-06-20 10:48:46'),(7,'XC-2026-0007','抖音同款 H5 活动页','douyin','甜橙工作室','wx:tiancheng',2000.00,1,'doing','low','2026-06-27','抽奖 H5 活动页，含分享海报。',NULL,'2',0,3,'2026-06-17 10:48:46','2026-06-20 16:47:43');
+INSERT INTO `jiedan_order` VALUES (1,'XC-2026-0001','餐饮门店点餐小程序','taobao','老王餐饮','laowang','wx:laowang888',6800.00,2,'doing','high','2026-06-24','微信小程序点餐+后台订单管理，含堂食/外带，需对接微信支付。',NULL,NULL,NULL,'',0,0,'2026-06-14 10:48:46','2026-06-20 10:48:46'),(2,'XC-2026-0002','企业官网改版（响应式）','wechat','海蓝科技','hailan','wx:hailan_tech',4200.00,2,'review','medium','2026-06-21','5个页面官网改版，适配手机端，提供源码。',NULL,NULL,NULL,'1',0,0,'2026-06-08 10:48:46','2026-06-20 10:48:46'),(3,'XC-2026-0003','Python 数据爬取脚本','xianyu','研究生小李','','wx:lxiaoli',900.00,2,'doing','medium','2026-06-19','爬取电商商品数据导出 Excel，带定时任务。',NULL,NULL,NULL,'',0,0,'2026-06-16 10:48:46','2026-06-20 10:48:46'),(4,'XC-2026-0004','毕业设计：图书管理系统','taobao','学生客户','','wx:book_sys',1500.00,2,'pending','low','2026-07-10','SpringBoot+Vue 图书管理系统，含论文初稿。',NULL,NULL,NULL,'2',0,0,'2026-06-19 10:48:46','2026-06-20 10:48:46'),(5,'XC-2026-0005','小程序 Bug 修复（紧急）','wechat','老客户·张总','','wx:zhangzong',600.00,2,'pending','high','2026-06-22','线上小程序登录偶发失败，需尽快定位修复。',NULL,NULL,NULL,'2',0,0,'2026-06-20 10:48:46','2026-06-20 10:48:46'),(6,'XC-2026-0006','后台管理系统二次开发','taobao','云图信息','','wx:yuntu',9500.00,2,'done','medium','2026-06-17','基于若依新增3个业务模块，含权限配置。',NULL,NULL,NULL,'',1,0,'2026-05-26 10:48:46','2026-06-20 10:48:46'),(7,'XC-2026-0007','抖音同款 H5 活动页','douyin','甜橙工作室','','wx:tiancheng',2000.00,1,'doing','low','2026-06-27','抽奖 H5 活动页，含分享海报。',NULL,NULL,NULL,'2',0,3,'2026-06-17 10:48:46','2026-06-20 16:47:43');
 /*!40000 ALTER TABLE `jiedan_order` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -543,7 +546,7 @@ CREATE TABLE `sys_user` (
 
 LOCK TABLES `sys_user` WRITE;
 /*!40000 ALTER TABLE `sys_user` DISABLE KEYS */;
-INSERT INTO `sys_user` VALUES (1,101,'admin','管理员','00','admin@qq.com','15888888888','1','','$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2','0','0','127.0.0.1','2026-06-21 15:39:52','2026-06-20 00:43:42','admin','2026-06-20 00:43:42','',NULL,'超级管理员'),(2,101,'customer','客户账号','2','customer@example.com','','2','','$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK','0','0','',NULL,'2026-06-22 00:00:00','admin','2026-06-22 00:00:00','',NULL,'默认客户账号');
+INSERT INTO `sys_user` VALUES (1,101,'admin','管理员','00','admin@qq.com','15888888888','1','','$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2','0','0','127.0.0.1','2026-06-21 15:39:52','2026-06-20 00:43:42','admin','2026-06-20 00:43:42','',NULL,'超级管理员'),(2,101,'customer','客户账号','2','customer@example.com','','2','','$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK','0','0','',NULL,'2026-06-22 00:00:00','admin','2026-06-22 00:00:00','',NULL,'默认客户账号'),(101,100,'laowang','老王餐饮','2','','','2','','$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK','0','0','',NULL,'2026-06-22 00:00:00','admin','2026-06-22 00:00:00','',NULL,'演示客户账号'),(102,100,'hailan','海蓝科技','2','','','2','','$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK','0','0','',NULL,'2026-06-22 00:00:00','admin','2026-06-22 00:00:00','',NULL,'演示客户账号');
 /*!40000 ALTER TABLE `sys_user` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -591,7 +594,7 @@ CREATE TABLE `sys_user_role` (
 
 LOCK TABLES `sys_user_role` WRITE;
 /*!40000 ALTER TABLE `sys_user_role` DISABLE KEYS */;
-INSERT INTO `sys_user_role` VALUES (1,1),(2,2);
+INSERT INTO `sys_user_role` VALUES (1,1),(2,2),(101,2),(102,2);
 /*!40000 ALTER TABLE `sys_user_role` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

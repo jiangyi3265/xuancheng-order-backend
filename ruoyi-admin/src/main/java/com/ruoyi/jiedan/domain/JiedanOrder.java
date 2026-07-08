@@ -13,6 +13,8 @@ public class JiedanOrder
     private String title;
     private String channel;
     private String customer;
+    /** 归属客户账号（sys_user.user_name），客户端凭此看自己的项目 */
+    private String customerAccount;
     private String contact;
     private BigDecimal amount;
     private Long ownerId;
@@ -22,6 +24,10 @@ public class JiedanOrder
     private String requirement;
     /** 需求材料（JSON 字符串） */
     private String attachments;
+    /** 项目记事本正文（内部使用，客户端不可见） */
+    private String notes;
+    /** 记事本附件（JSON 字符串，图片/文档） */
+    private String noteAttachments;
     /** 未读成员 id，逗号分隔 */
     private String unread;
     private Integer paid;
@@ -39,6 +45,8 @@ public class JiedanOrder
     public void setChannel(String channel) { this.channel = channel; }
     public String getCustomer() { return customer; }
     public void setCustomer(String customer) { this.customer = customer; }
+    public String getCustomerAccount() { return customerAccount; }
+    public void setCustomerAccount(String customerAccount) { this.customerAccount = customerAccount; }
     public String getContact() { return contact; }
     public void setContact(String contact) { this.contact = contact; }
     public BigDecimal getAmount() { return amount; }
@@ -55,6 +63,10 @@ public class JiedanOrder
     public void setRequirement(String requirement) { this.requirement = requirement; }
     public String getAttachments() { return attachments; }
     public void setAttachments(String attachments) { this.attachments = attachments; }
+    public String getNotes() { return notes; }
+    public void setNotes(String notes) { this.notes = notes; }
+    public String getNoteAttachments() { return noteAttachments; }
+    public void setNoteAttachments(String noteAttachments) { this.noteAttachments = noteAttachments; }
     public String getUnread() { return unread; }
     public void setUnread(String unread) { this.unread = unread; }
     public Integer getPaid() { return paid; }

@@ -8,6 +8,7 @@
         <result property="title"       column="title"       />
         <result property="channel"     column="channel"     />
         <result property="customer"    column="customer"    />
+        <result property="customerAccount" column="customer_account" />
         <result property="contact"     column="contact"     />
         <result property="amount"      column="amount"      />
         <result property="ownerId"     column="owner_id"    />
@@ -16,6 +17,8 @@
         <result property="deadline"    column="deadline"    />
         <result property="requirement" column="requirement" />
         <result property="attachments" column="attachments" />
+        <result property="notes"       column="notes"       />
+        <result property="noteAttachments" column="note_attachments" />
         <result property="unread"      column="unread"      />
         <result property="paid"        column="paid"        />
         <result property="revisions"   column="revisions"   />
@@ -24,7 +27,7 @@
     </resultMap>
 
     <sql id="cols">
-        id, order_no, title, channel, customer, contact, amount, owner_id, status,
+        id, order_no, title, channel, customer, customer_account, contact, amount, owner_id, status,
         priority, deadline, requirement, attachments, unread, paid, revisions, create_time, update_time
     </sql>
 
@@ -32,16 +35,26 @@
         select <include refid="cols"/> from jiedan_order order by id desc
     </select>
 
+    <select id="selectByCustomerAccount" parameterType="String" resultMap="JiedanOrderResult">
+        select <include refid="cols"/> from jiedan_order
+        where customer_account = #{customerAccount} order by id desc
+    </select>
+
     <select id="selectById" parameterType="Long" resultMap="JiedanOrderResult">
         select <include refid="cols"/> from jiedan_order where id = #{id}
     </select>
 
+    <!-- 记事本单独取，避免把大字段塞进列表 -->
+    <select id="selectNotesById" parameterType="Long" resultMap="JiedanOrderResult">
+        select id, notes, note_attachments from jiedan_order where id = #{id}
+    </select>
+
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanOrder" useGeneratedKeys="true" keyProperty="id">
         insert into jiedan_order
-        (order_no, title, channel, customer, contact, amount, owner_id, status, priority,
+        (order_no, title, channel, customer, customer_account, contact, amount, owner_id, status, priority,
          deadline, requirement, attachments, unread, paid, revisions, create_time, update_time)
         values
-        (#{orderNo}, #{title}, #{channel}, #{customer}, #{contact}, #{amount}, #{ownerId}, #{status}, #{priority},
+        (#{orderNo}, #{title}, #{channel}, #{customer}, #{customerAccount}, #{contact}, #{amount}, #{ownerId}, #{status}, #{priority},
          #{deadline}, #{requirement}, #{attachments}, #{unread}, #{paid}, #{revisions}, #{createTime}, #{updateTime})
     </insert>
 
@@ -52,6 +65,7 @@
             <if test="title != null">title = #{title},</if>
             <if test="channel != null">channel = #{channel},</if>
             <if test="customer != null">customer = #{customer},</if>
+            <if test="customerAccount != null">customer_account = #{customerAccount},</if>
             <if test="contact != null">contact = #{contact},</if>
             <if test="amount != null">amount = #{amount},</if>
             <if test="ownerId != null">owner_id = #{ownerId},</if>
@@ -60,6 +74,8 @@
             <if test="deadline != null">deadline = #{deadline},</if>
             <if test="requirement != null">requirement = #{requirement},</if>
             <if test="attachments != null">attachments = #{attachments},</if>
+            <if test="notes != null">notes = #{notes},</if>
+            <if test="noteAttachments != null">note_attachments = #{noteAttachments},</if>
             <if test="unread != null">unread = #{unread},</if>
             <if test="paid != null">paid = #{paid},</if>
             <if test="revisions != null">revisions = #{revisions},</if>

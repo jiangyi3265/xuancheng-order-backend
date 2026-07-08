@@ -7,7 +7,11 @@ public interface JiedanOrderMapper
 {
     List<JiedanOrder> selectAll();
 
+    List<JiedanOrder> selectByCustomerAccount(String customerAccount);
+
     JiedanOrder selectById(Long id);
+
+    JiedanOrder selectNotesById(Long id);
 
     int insert(JiedanOrder order);
 

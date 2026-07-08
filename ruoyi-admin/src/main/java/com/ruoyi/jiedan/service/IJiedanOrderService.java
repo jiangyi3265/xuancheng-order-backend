@@ -9,11 +9,27 @@ public interface IJiedanOrderService
 
     Map<String, Object> getVO(Long id);
 
+    /** 客户门户：列出某客户账号名下的项目 */
+    List<Map<String, Object>> listByCustomer(String account);
+
+    /** 客户门户：查看单个项目（校验归属，非本人返回 null） */
+    Map<String, Object> getForCustomer(Long id, String account);
+
+    /** 客户门户：客户留言（校验归属；老板+员工同时未读并推送） */
+    Map<String, Object> customerMessage(Long orderId, String account, String customerName,
+                                        String content, Object attachments);
+
     Map<String, Object> create(Map<String, Object> payload);
 
     Map<String, Object> update(Map<String, Object> payload);
 
     void delete(Long id);
+
+    /** 项目记事本：读取（内部使用） */
+    Map<String, Object> getNotes(Long id);
+
+    /** 项目记事本：保存（内部使用） */
+    Map<String, Object> saveNotes(Map<String, Object> payload);
 
     Map<String, Object> addProgress(Map<String, Object> payload);
 

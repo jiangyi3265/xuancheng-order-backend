@@ -75,6 +75,52 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return o == null ? null : toVO(o);
     }
 
+    // ---------- 客户门户：仅限本人项目 ----------
+    @Override
+    public List<Map<String, Object>> listByCustomer(String account)
+    {
+        List<Map<String, Object>> list = new ArrayList<>();
+        if (account == null || account.trim().isEmpty()) return list;
+        for (JiedanOrder o : orderMapper.selectByCustomerAccount(account))
+        {
+            list.add(toVO(o));
+        }
+        return list;
+    }
+
+    @Override
+    public Map<String, Object> getForCustomer(Long id, String account)
+    {
+        JiedanOrder o = orderMapper.selectById(id);
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
+        return toVO(o);
+    }
+
+    // ---------- 客户留言：老板与员工同时收到并标记未读 ----------
+    @Override
+    public Map<String, Object> customerMessage(Long orderId, String account, String customerName,
+                                               String content, Object attachments)
+    {
+        JiedanOrder o = orderMapper.selectById(orderId);
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
+        Date now = new Date();
+        String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
+        addTimeline(orderId, name, "message", content, jsonStr(attachments), now);
+        // 客户消息：老板和员工都置为未读
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(orderId);
+        upd.setUnread(join(MEMBER_IDS));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+        // 推送给全部成员
+        String brief = strOr(content, "[消息]");
+        for (Long m : MEMBER_IDS)
+        {
+            pushService.pushToMember(m, "💬 客户留言", o.getTitle() + "：" + brief + "（" + name + "）");
+        }
+        return getForCustomer(orderId, account);
+    }
+
     // ---------- 新增（建单即派单 + 推送） ----------
     @Override
     @Transactional
@@ -88,6 +134,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         o.setTitle(strOr(asStr(p.get("title")), "未命名需求"));
         o.setChannel(strOr(asStr(p.get("channel")), "wechat"));
         o.setCustomer(asStr(p.get("customer")));
+        o.setCustomerAccount(asStr(p.get("customerAccount")));
         o.setContact(asStr(p.get("contact")));
         o.setAmount(asDecimal(p.get("amount")));
         o.setOwnerId(asLong(p.get("ownerId")));
@@ -125,6 +172,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (p.containsKey("title")) o.setTitle(asStr(p.get("title")));
         if (p.containsKey("channel")) o.setChannel(asStr(p.get("channel")));
         if (p.containsKey("customer")) o.setCustomer(asStr(p.get("customer")));
+        if (p.containsKey("customerAccount")) o.setCustomerAccount(asStr(p.get("customerAccount")));
         if (p.containsKey("contact")) o.setContact(asStr(p.get("contact")));
         if (p.containsKey("amount")) o.setAmount(asDecimal(p.get("amount")));
         if (p.containsKey("ownerId")) o.setOwnerId(asLong(p.get("ownerId")));
@@ -147,6 +195,32 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         timelineMapper.deleteByOrderId(id);
         orderMapper.deleteById(id);
+    }
+
+    // ---------- 项目记事本（内部台账） ----------
+    @Override
+    public Map<String, Object> getNotes(Long id)
+    {
+        JiedanOrder o = orderMapper.selectNotesById(id);
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", id);
+        vo.put("notes", o == null ? "" : strOr(o.getNotes(), ""));
+        vo.put("noteAttachments", o == null ? new ArrayList<>() : parseArr(o.getNoteAttachments()));
+        return vo;
+    }
+
+    @Override
+    public Map<String, Object> saveNotes(Map<String, Object> p)
+    {
+        Long id = asLong(p.get("id"));
+        if (id == null) return null;
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(id);
+        upd.setNotes(strOr(asStr(p.get("notes")), ""));
+        upd.setNoteAttachments(jsonStr(p.get("noteAttachments")));
+        upd.setUpdateTime(new Date());
+        orderMapper.update(upd);
+        return getNotes(id);
     }
 
     // ---------- 追加进度 ----------
@@ -357,6 +431,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("title", o.getTitle());
         vo.put("channel", o.getChannel());
         vo.put("customer", o.getCustomer());
+        vo.put("customerAccount", o.getCustomerAccount());
         vo.put("contact", o.getContact());
         vo.put("amount", o.getAmount());
         vo.put("ownerId", o.getOwnerId());
