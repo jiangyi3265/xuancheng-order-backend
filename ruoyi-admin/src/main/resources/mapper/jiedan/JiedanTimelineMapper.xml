@@ -14,7 +14,7 @@
 
     <select id="selectByOrderId" parameterType="Long" resultMap="JiedanTimelineResult">
         select id, order_id, user_name, type, content, attachments, create_time
-        from jiedan_timeline where order_id = #{orderId} order by id desc
+        from jiedan_timeline where order_id = #{orderId} order by id asc
     </select>
 
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanTimeline" useGeneratedKeys="true" keyProperty="id">
