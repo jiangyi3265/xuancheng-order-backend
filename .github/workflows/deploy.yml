@@ -85,6 +85,85 @@ jobs:
             test -s "$APP_DIR/$JAR_NAME"
             test -s "/tmp/backend-deploy/backend-patch.tar.gz"
 
+            run_schema_sql() {
+              if MYSQL_PWD="$APP_DB_PASSWORD" mysql -h127.0.0.1 -P3306 -uxc_app -D xc_jiedan -e "select 1" >/dev/null 2>&1; then
+                MYSQL_PWD="$APP_DB_PASSWORD" mysql -h127.0.0.1 -P3306 -uxc_app -D xc_jiedan
+                return
+              fi
+              if MYSQL_PWD="$APP_DB_PASSWORD" mysql -uroot -D xc_jiedan -e "select 1" >/dev/null 2>&1; then
+                MYSQL_PWD="$APP_DB_PASSWORD" mysql -uroot -D xc_jiedan
+                return
+              fi
+              if MYSQL_PWD=123456 mysql -uroot -D xc_jiedan -e "select 1" >/dev/null 2>&1; then
+                MYSQL_PWD=123456 mysql -uroot -D xc_jiedan
+                return
+              fi
+              if mysql -uroot -D xc_jiedan -e "select 1" >/dev/null 2>&1; then
+                mysql -uroot -D xc_jiedan
+                return
+              fi
+              echo "unable to connect to xc_jiedan database" >&2
+              return 1
+            }
+
+            run_schema_sql <<'SQL'
+            SET @db = DATABASE();
+
+            SET @sql = IF(
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'customer_account') = 0,
+              'ALTER TABLE jiedan_order ADD COLUMN customer_account VARCHAR(64) DEFAULT '''' AFTER customer',
+              'SELECT 1'
+            );
+            PREPARE stmt FROM @sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
+
+            SET @sql = IF(
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'notes') = 0,
+              'ALTER TABLE jiedan_order ADD COLUMN notes LONGTEXT NULL AFTER attachments',
+              'SELECT 1'
+            );
+            PREPARE stmt FROM @sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
+
+            SET @sql = IF(
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'note_attachments') = 0,
+              'ALTER TABLE jiedan_order ADD COLUMN note_attachments LONGTEXT NULL AFTER notes',
+              'SELECT 1'
+            );
+            PREPARE stmt FROM @sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
+
+            INSERT IGNORE INTO sys_user
+              (user_id, dept_id, user_name, nick_name, user_type, email, phonenumber, sex, avatar, password,
+               status, del_flag, login_ip, login_date, create_by, create_time, update_by, update_time, remark)
+            VALUES
+              (2, 101, 'customer', '客户账号', '2', 'customer@example.com', '', '2', '',
+               '$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK',
+               '0', '0', '', NULL, 'admin', NOW(), '', NULL, '默认客户账号'),
+              (101, 100, 'laowang', '老王餐饮', '2', '', '', '2', '',
+               '$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK',
+               '0', '0', '', NULL, 'admin', NOW(), '', NULL, '演示客户账号'),
+              (102, 100, 'hailan', '海蓝科技', '2', '', '', '2', '',
+               '$2a$10$BNYaFwOidOKPaUdXALy8hugrW2cxuB5tYp2J8sE1K.d10fnzUHgsK',
+               '0', '0', '', NULL, 'admin', NOW(), '', NULL, '演示客户账号');
+
+            INSERT IGNORE INTO sys_user_role (user_id, role_id) VALUES (2, 2), (101, 2), (102, 2);
+
+            UPDATE jiedan_order
+              SET customer_account = 'laowang'
+              WHERE id = 1 AND (customer_account IS NULL OR customer_account = '');
+            UPDATE jiedan_order
+              SET customer_account = 'hailan'
+              WHERE id = 2 AND (customer_account IS NULL OR customer_account = '');
+            SQL
+            echo "database schema migration ok"
+
             cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
             PATCH_DIR="$(mktemp -d)"
             tar -xzf /tmp/backend-deploy/backend-patch.tar.gz -C "$PATCH_DIR"
