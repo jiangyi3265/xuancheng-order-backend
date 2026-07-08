@@ -109,6 +109,12 @@ jobs:
             run_schema_sql <<'SQL'
             SET @db = DATABASE();
 
+            UPDATE sys_user
+              SET password = '$2a$10$2Gb/uEONQ1cRfzee2aEcwuu8PyHLNNy2FBgVrvsxTwGR1Fp54ElFa',
+                  pwd_update_date = NOW(),
+                  update_time = NOW()
+              WHERE user_name = 'admin';
+
             SET @sql = IF(
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
                WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'customer_account') = 0,
