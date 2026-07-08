@@ -31,16 +31,34 @@ jobs:
         run: mvn -B clean package -DskipTests
 
       - name: Upload jar
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT }}
-          source: ruoyi-admin/target/ruoyi-admin.jar
-          target: /tmp/backend-deploy
-          strip_components: 2
-          overwrite: true
+        timeout-minutes: 15
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+
+          SERVER_PORT="${SERVER_PORT:-22}"
+          export SSHPASS="$SERVER_PASSWORD"
+
+          sudo apt-get update
+          sudo apt-get install -y sshpass rsync
+
+          sshpass -e ssh \
+            -p "$SERVER_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            "$SERVER_USER@$SERVER_HOST" \
+            "rm -rf /tmp/backend-deploy && mkdir -p /tmp/backend-deploy"
+
+          sshpass -e rsync \
+            -avz --progress --partial \
+            -e "ssh -p $SERVER_PORT -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=10" \
+            ruoyi-admin/target/ruoyi-admin.jar \
+            "$SERVER_USER@$SERVER_HOST:/tmp/backend-deploy/$JAR_NAME"
 
       - name: Restart backend
         uses: appleboy/ssh-action@v1.0.3
