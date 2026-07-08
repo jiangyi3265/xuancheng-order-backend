@@ -160,6 +160,16 @@ jobs:
             INSERT IGNORE INTO sys_user_role (user_id, role_id)
               SELECT user_id, 2 FROM sys_user WHERE user_name IN ('customer', 'laowang', 'hailan');
 
+            DELETE ur FROM sys_user_role ur
+              JOIN sys_user u ON u.user_id = ur.user_id
+              WHERE (u.user_name = 'customer' AND u.user_id <> 2)
+                 OR (u.user_name = 'laowang' AND u.user_id <> 101)
+                 OR (u.user_name = 'hailan' AND u.user_id <> 102);
+            DELETE FROM sys_user
+              WHERE (user_name = 'customer' AND user_id <> 2)
+                 OR (user_name = 'laowang' AND user_id <> 101)
+                 OR (user_name = 'hailan' AND user_id <> 102);
+
             UPDATE sys_user
               SET nick_name = CASE user_name
                     WHEN 'customer' THEN CONVERT(0xE5AEA2E688B7E8B4A6E58FB7 USING utf8mb4)
