@@ -63,7 +63,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         List<Map<String, Object>> list = new ArrayList<>();
         for (JiedanOrder o : orderMapper.selectAll())
         {
-            list.add(toVO(o));
+            list.add(toVO(o, true));
         }
         return list;
     }
@@ -72,7 +72,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     public Map<String, Object> getVO(Long id)
     {
         JiedanOrder o = orderMapper.selectById(id);
-        return o == null ? null : toVO(o);
+        return o == null ? null : toVO(o, true);
     }
 
     // ---------- 客户门户：仅限本人项目 ----------
@@ -83,7 +83,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (account == null || account.trim().isEmpty()) return list;
         for (JiedanOrder o : orderMapper.selectByCustomerAccount(account))
         {
-            list.add(toVO(o));
+            list.add(toVO(o, false));
         }
         return list;
     }
@@ -93,7 +93,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         JiedanOrder o = orderMapper.selectById(id);
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
-        return toVO(o);
+        return toVO(o, false);
     }
 
     // ---------- 客户留言：老板与员工同时收到并标记未读 ----------
@@ -195,6 +195,16 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         timelineMapper.deleteByOrderId(id);
         orderMapper.deleteById(id);
+    }
+
+    @Override
+    @Transactional
+    public boolean deleteForCustomer(Long id, String account)
+    {
+        JiedanOrder o = orderMapper.selectById(id);
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return false;
+        delete(id);
+        return true;
     }
 
     // ---------- 项目记事本（内部台账） ----------
@@ -423,7 +433,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         orderMapper.update(upd);
     }
 
-    private Map<String, Object> toVO(JiedanOrder o)
+    private Map<String, Object> toVO(JiedanOrder o, boolean includeInternal)
     {
         Map<String, Object> vo = new LinkedHashMap<>();
         vo.put("id", o.getId());
@@ -448,6 +458,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         List<Map<String, Object>> tl = new ArrayList<>();
         for (JiedanTimeline t : timelineMapper.selectByOrderId(o.getId()))
         {
+            if (!includeInternal && !isChatType(t.getType())) continue;
             Map<String, Object> tm = new LinkedHashMap<>();
             tm.put("time", fmt(t.getCreateTime()));
             tm.put("user", t.getUserName());
@@ -458,6 +469,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         }
         vo.put("timeline", tl);
         return vo;
+    }
+
+    private boolean isChatType(String type)
+    {
+        return "message".equals(type) || "reply".equals(type);
     }
 
     private String dash(String s)

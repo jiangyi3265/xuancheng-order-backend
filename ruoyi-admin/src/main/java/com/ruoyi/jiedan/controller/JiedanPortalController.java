@@ -3,6 +3,7 @@ package com.ruoyi.jiedan.controller;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,6 +44,17 @@ public class JiedanPortalController extends BaseController
         Map<String, Object> vo = service.getForCustomer(id, SecurityUtils.getUsername());
         if (vo == null) return AjaxResult.error("项目不存在或无权查看");
         return AjaxResult.success(vo);
+    }
+
+    /** 客户删除自己提交的问题 */
+    @DeleteMapping("/orders/{id}")
+    public AjaxResult removeMyOrder(@PathVariable Long id)
+    {
+        if (!service.deleteForCustomer(id, SecurityUtils.getUsername()))
+        {
+            return AjaxResult.error("项目不存在或无权删除");
+        }
+        return AjaxResult.success();
     }
 
     /** 发送留言（content + attachments[图片/视频/语音]） */

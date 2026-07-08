@@ -25,6 +25,8 @@ public interface IJiedanOrderService
 
     void delete(Long id);
 
+    boolean deleteForCustomer(Long id, String account);
+
     /** 项目记事本：读取（内部使用） */
     Map<String, Object> getNotes(Long id);
 
