@@ -112,12 +112,15 @@ jobs:
             SET @sql = IF(
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
                WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'customer_account') = 0,
-              'ALTER TABLE jiedan_order ADD COLUMN customer_account VARCHAR(64) DEFAULT '''' AFTER customer',
+              'ALTER TABLE jiedan_order ADD COLUMN customer_account VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT '''' AFTER customer',
               'SELECT 1'
             );
             PREPARE stmt FROM @sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
+
+            ALTER TABLE jiedan_order
+              MODIFY customer_account VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT '';
 
             SET @sql = IF(
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS

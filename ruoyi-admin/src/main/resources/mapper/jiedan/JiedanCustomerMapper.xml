@@ -9,8 +9,10 @@
             u.nick_name     as nickName,
             u.status        as status,
             u.create_time   as createTime,
-            (select count(*) from jiedan_order o where o.customer_account = u.user_name) as projectCount,
-            (select count(*) from jiedan_order o where o.customer_account = u.user_name
+            (select count(*) from jiedan_order o
+                where o.customer_account collate utf8mb4_general_ci = u.user_name collate utf8mb4_general_ci) as projectCount,
+            (select count(*) from jiedan_order o
+                where o.customer_account collate utf8mb4_general_ci = u.user_name collate utf8mb4_general_ci
                 and o.status not in ('done', 'cancelled')) as unfinishedCount
         from sys_user u
         join sys_user_role ur on ur.user_id = u.user_id
@@ -20,7 +22,9 @@
     </select>
 
     <update id="clearBinding" parameterType="String">
-        update jiedan_order set customer_account = '' where customer_account = #{account}
+        update jiedan_order
+        set customer_account = ''
+        where customer_account collate utf8mb4_general_ci = convert(#{account} using utf8mb4) collate utf8mb4_general_ci
     </update>
 
 </mapper>
