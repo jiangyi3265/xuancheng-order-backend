@@ -9,6 +9,8 @@ public interface JiedanOrderMapper
 
     List<JiedanOrder> selectByCustomerAccount(String customerAccount);
 
+    List<java.util.Map<String, Object>> selectCustomerSummaries(String customerAccount);
+
     JiedanOrder selectById(Long id);
 
     JiedanOrder selectNotesById(Long id);

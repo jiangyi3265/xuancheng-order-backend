@@ -91,9 +91,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         List<Map<String, Object>> list = new ArrayList<>();
         if (account == null || account.trim().isEmpty()) return list;
-        for (JiedanOrder o : orderMapper.selectByCustomerAccount(account))
+        for (Map<String, Object> row : orderMapper.selectCustomerSummaries(account))
         {
-            list.add(toVO(o, false));
+            list.add(toListSummaryVO(row));
         }
         return list;
     }
@@ -685,6 +685,41 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return vo;
     }
 
+    private Map<String, Object> toListSummaryVO(Map<String, Object> row)
+    {
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", row.get("id"));
+        vo.put("orderNo", row.get("orderNo"));
+        vo.put("title", row.get("title"));
+        vo.put("channel", row.get("channel"));
+        vo.put("customer", row.get("customer"));
+        vo.put("customerAccount", row.get("customerAccount"));
+        vo.put("amount", row.get("amount"));
+        vo.put("ownerId", row.get("ownerId"));
+        vo.put("status", row.get("status"));
+        vo.put("priority", row.get("priority"));
+        vo.put("deadline", row.get("deadline"));
+        vo.put("requirement", row.get("requirement"));
+        vo.put("paid", asBool(row.get("paid")));
+        vo.put("revisions", row.get("revisions") == null ? 0 : row.get("revisions"));
+        vo.put("createTime", fmtIfDate(row.get("createTime")));
+        vo.put("updateTime", fmtIfDate(row.get("updateTime")));
+        vo.put("messageCount", row.get("messageCount") == null ? 0 : row.get("messageCount"));
+
+        String lastType = asStr(row.get("lastMessageType"));
+        if (lastType != null && !lastType.trim().isEmpty())
+        {
+            Map<String, Object> last = new LinkedHashMap<>();
+            last.put("type", lastType);
+            last.put("user", row.get("lastMessageUser"));
+            last.put("content", row.get("lastMessageContent"));
+            last.put("attachments", parseArr(asStr(row.get("lastMessageAttachments"))));
+            last.put("time", fmtIfDate(row.get("lastMessageTime")));
+            vo.put("lastMessage", last);
+        }
+        return vo;
+    }
+
     private boolean isChatType(String type)
     {
         return "message".equals(type) || "reply".equals(type);
@@ -761,6 +796,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private String fmt(Date d)
     {
         return d == null ? "" : new SimpleDateFormat("yyyy-MM-dd HH:mm").format(d);
+    }
+
+    private String fmtIfDate(Object value)
+    {
+        if (value == null) return "";
+        if (value instanceof Date) return fmt((Date) value);
+        return value.toString();
     }
 
     private String year(Date d)

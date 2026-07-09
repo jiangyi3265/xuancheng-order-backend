@@ -129,6 +129,16 @@ jobs:
               MODIFY customer_account VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT '';
 
             SET @sql = IF(
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+               WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND INDEX_NAME = 'idx_jiedan_order_customer_account_id') = 0,
+              'CREATE INDEX idx_jiedan_order_customer_account_id ON jiedan_order (customer_account, id)',
+              'SELECT 1'
+            );
+            PREPARE stmt FROM @sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
+
+            SET @sql = IF(
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
                WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'notes') = 0,
               'ALTER TABLE jiedan_order ADD COLUMN notes LONGTEXT NULL AFTER attachments',
@@ -182,6 +192,16 @@ jobs:
               PRIMARY KEY (id),
               KEY idx_jiedan_bug_update_bug_id (bug_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+            SET @sql = IF(
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+               WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_timeline' AND INDEX_NAME = 'idx_jiedan_timeline_order_type_id') = 0,
+              'CREATE INDEX idx_jiedan_timeline_order_type_id ON jiedan_timeline (order_id, type, id)',
+              'SELECT 1'
+            );
+            PREPARE stmt FROM @sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
 
             INSERT IGNORE INTO sys_user
               (user_id, dept_id, user_name, nick_name, user_type, email, phonenumber, sex, avatar, password,

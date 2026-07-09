@@ -44,7 +44,8 @@ CREATE TABLE `jiedan_order` (
   `revisions` int DEFAULT '0' COMMENT '改稿次数',
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   `update_time` datetime DEFAULT NULL COMMENT '更新时间',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_order_customer_account_id` (`customer_account`,`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='接单订单';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -155,7 +156,8 @@ CREATE TABLE `jiedan_timeline` (
   `attachments` longtext COMMENT '附件(JSON)',
   `create_time` datetime DEFAULT NULL COMMENT '时间',
   PRIMARY KEY (`id`),
-  KEY `idx_order` (`order_id`)
+  KEY `idx_order` (`order_id`),
+  KEY `idx_jiedan_timeline_order_type_id` (`order_id`,`type`,`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=14 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='接单进度时间线';
 /*!40101 SET character_set_client = @saved_cs_client */;
 

@@ -40,6 +40,44 @@
         where customer_account = #{customerAccount} order by id desc
     </select>
 
+    <select id="selectCustomerSummaries" parameterType="String" resultType="java.util.LinkedHashMap">
+        select
+            o.id as id,
+            o.order_no as orderNo,
+            o.title as title,
+            o.channel as channel,
+            o.customer as customer,
+            o.customer_account as customerAccount,
+            o.amount as amount,
+            o.owner_id as ownerId,
+            o.status as status,
+            o.priority as priority,
+            o.deadline as deadline,
+            o.requirement as requirement,
+            o.paid as paid,
+            o.revisions as revisions,
+            o.create_time as createTime,
+            o.update_time as updateTime,
+            coalesce(mc.message_count, 0) as messageCount,
+            lt.user_name as lastMessageUser,
+            lt.type as lastMessageType,
+            lt.content as lastMessageContent,
+            lt.attachments as lastMessageAttachments,
+            lt.create_time as lastMessageTime
+        from jiedan_order o
+        left join (
+            select t.order_id, count(*) as message_count, max(t.id) as last_id
+            from jiedan_timeline t
+            join jiedan_order co on co.id = t.order_id
+            where co.customer_account = #{customerAccount}
+              and t.type in ('message', 'reply')
+            group by t.order_id
+        ) mc on mc.order_id = o.id
+        left join jiedan_timeline lt on lt.id = mc.last_id
+        where o.customer_account = #{customerAccount}
+        order by o.id desc
+    </select>
+
     <select id="selectById" parameterType="Long" resultMap="JiedanOrderResult">
         select <include refid="cols"/> from jiedan_order where id = #{id}
     </select>
