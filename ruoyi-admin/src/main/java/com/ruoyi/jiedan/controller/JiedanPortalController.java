@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -81,6 +82,15 @@ public class JiedanPortalController extends BaseController
     {
         Map<String, Object> vo = service.addBugUpdateForCustomer(id, body, SecurityUtils.getUsername(), nickName());
         if (vo == null) return AjaxResult.error("追加内容不能为空或 Bug 不存在");
+        return AjaxResult.success(vo);
+    }
+
+    /** 客户更新 Bug 解决状态。 */
+    @PutMapping("/bug/{id}/status")
+    public AjaxResult bugStatus(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        Map<String, Object> vo = service.changeBugStatusForCustomer(id, body, SecurityUtils.getUsername(), nickName());
+        if (vo == null) return AjaxResult.error("Bug 不存在或无权操作");
         return AjaxResult.success(vo);
     }
 

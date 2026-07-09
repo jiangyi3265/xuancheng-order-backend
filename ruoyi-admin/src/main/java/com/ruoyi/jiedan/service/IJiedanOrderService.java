@@ -33,11 +33,15 @@ public interface IJiedanOrderService
 
     Map<String, Object> addBugUpdate(Long bugId, Map<String, Object> payload);
 
+    Map<String, Object> changeBugStatus(Long bugId, Map<String, Object> payload);
+
     Map<String, Object> createBugForCustomer(Map<String, Object> payload, String account, String customerName);
 
     Map<String, Object> deleteBugForCustomer(Long bugId, String account);
 
     Map<String, Object> addBugUpdateForCustomer(Long bugId, Map<String, Object> payload, String account, String customerName);
+
+    Map<String, Object> changeBugStatusForCustomer(Long bugId, Map<String, Object> payload, String account, String customerName);
 
     /** 项目记事本：读取（内部使用） */
     Map<String, Object> getNotes(Long id);

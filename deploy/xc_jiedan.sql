@@ -59,6 +59,63 @@ INSERT INTO `jiedan_order` VALUES (1,'XC-2026-0001','餐饮门店点餐小程序
 UNLOCK TABLES;
 
 --
+-- Table structure for table `jiedan_bug`
+--
+
+DROP TABLE IF EXISTS `jiedan_bug`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `jiedan_bug` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'Bug ID',
+  `order_id` bigint NOT NULL COMMENT '订单ID',
+  `content` text COMMENT 'Bug说明',
+  `attachments` longtext COMMENT '附件(JSON)',
+  `status` varchar(20) COLLATE utf8mb4_general_ci DEFAULT 'open' COMMENT '状态 open/resolved',
+  `created_by` varchar(64) COLLATE utf8mb4_general_ci DEFAULT '' COMMENT '创建人',
+  `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_bug_order_id` (`order_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='项目Bug清单';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `jiedan_bug`
+--
+
+LOCK TABLES `jiedan_bug` WRITE;
+/*!40000 ALTER TABLE `jiedan_bug` DISABLE KEYS */;
+/*!40000 ALTER TABLE `jiedan_bug` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `jiedan_bug_update`
+--
+
+DROP TABLE IF EXISTS `jiedan_bug_update`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `jiedan_bug_update` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '追加ID',
+  `bug_id` bigint NOT NULL COMMENT 'Bug ID',
+  `content` text COMMENT '追加说明',
+  `attachments` longtext COMMENT '附件(JSON)',
+  `created_by` varchar(64) COLLATE utf8mb4_general_ci DEFAULT '' COMMENT '创建人',
+  `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_bug_update_bug_id` (`bug_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Bug追加QA';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `jiedan_bug_update`
+--
+
+LOCK TABLES `jiedan_bug_update` WRITE;
+/*!40000 ALTER TABLE `jiedan_bug_update` DISABLE KEYS */;
+/*!40000 ALTER TABLE `jiedan_bug_update` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
 -- Table structure for table `jiedan_setting`
 --
 

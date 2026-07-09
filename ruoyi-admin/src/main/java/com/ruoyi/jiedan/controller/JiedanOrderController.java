@@ -93,6 +93,15 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(vo);
     }
 
+    @PutMapping("/bug/{id}/status")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult bugStatus(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        Map<String, Object> vo = service.changeBugStatus(id, body);
+        if (vo == null) return AjaxResult.error("Bug 不存在");
+        return AjaxResult.success(vo);
+    }
+
     @GetMapping("/notes/{id}")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult getNotes(@PathVariable Long id)

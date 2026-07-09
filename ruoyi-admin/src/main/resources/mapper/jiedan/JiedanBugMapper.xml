@@ -7,12 +7,13 @@
         <result property="orderId"     column="order_id"    />
         <result property="content"     column="content"     />
         <result property="attachments" column="attachments" />
+        <result property="status"      column="status"      />
         <result property="createdBy"   column="created_by"  />
         <result property="createTime"  column="create_time" />
     </resultMap>
 
     <sql id="cols">
-        id, order_id, content, attachments, created_by, create_time
+        id, order_id, content, attachments, status, created_by, create_time
     </sql>
 
     <select id="selectByOrderId" parameterType="Long" resultMap="JiedanBugResult">
@@ -24,9 +25,13 @@
     </select>
 
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBug" useGeneratedKeys="true" keyProperty="id">
-        insert into jiedan_bug (order_id, content, attachments, created_by, create_time)
-        values (#{orderId}, #{content}, #{attachments}, #{createdBy}, #{createTime})
+        insert into jiedan_bug (order_id, content, attachments, status, created_by, create_time)
+        values (#{orderId}, #{content}, #{attachments}, #{status}, #{createdBy}, #{createTime})
     </insert>
+
+    <update id="updateStatus">
+        update jiedan_bug set status = #{status} where id = #{id}
+    </update>
 
     <delete id="deleteById" parameterType="Long">
         delete from jiedan_bug where id = #{id}

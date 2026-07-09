@@ -270,6 +270,26 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Override
     @Transactional
+    public Map<String, Object> changeBugStatus(Long bugId, Map<String, Object> p)
+    {
+        JiedanBug bug = bugMapper.selectById(bugId);
+        if (bug == null) return null;
+        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
+        if (o == null) return null;
+
+        String status = normalizeBugStatus(p == null ? null : p.get("status"));
+        bugMapper.updateStatus(bugId, status);
+
+        Long by = p == null ? null : asLong(p.get("byMemberId"));
+        String byName = strOr(p == null ? null : asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        Date now = new Date();
+        touchUnread(o.getId(), by, now);
+        pushOthers(by, "Bug 状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)));
+        return getVO(o.getId());
+    }
+
+    @Override
+    @Transactional
     public Map<String, Object> createBugForCustomer(Map<String, Object> p, String account, String customerName)
     {
         Long orderId = asLong(p.get("orderId"));
@@ -323,6 +343,29 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUpdateTime(now);
         orderMapper.update(upd);
         pushOthers(null, "客户追加 Bug QA", o.getTitle() + dash(name));
+        return getForCustomer(o.getId(), account);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> changeBugStatusForCustomer(Long bugId, Map<String, Object> p, String account, String customerName)
+    {
+        JiedanBug bug = bugMapper.selectById(bugId);
+        if (bug == null) return null;
+        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
+
+        String status = normalizeBugStatus(p == null ? null : p.get("status"));
+        bugMapper.updateStatus(bugId, status);
+
+        Date now = new Date();
+        String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(o.getId());
+        upd.setUnread(join(MEMBER_IDS));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+        pushOthers(null, "客户更新 Bug 状态", o.getTitle() + dash(name) + dash(bugStatusLabel(status)));
         return getForCustomer(o.getId(), account);
     }
 
@@ -549,6 +592,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bug.setOrderId(orderId);
         bug.setContent(content);
         bug.setAttachments(jsonStr(attachments));
+        bug.setStatus("open");
         bug.setCreatedBy(user);
         bug.setCreateTime(time);
         bugMapper.insert(bug);
@@ -604,6 +648,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("orderId", b.getOrderId());
             bm.put("content", b.getContent());
             bm.put("attachments", parseArr(b.getAttachments()));
+            bm.put("status", normalizeBugStatus(b.getStatus()));
             bm.put("createdBy", b.getCreatedBy());
             bm.put("time", fmt(b.getCreateTime()));
 
@@ -653,6 +698,16 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (attachments instanceof List) return ((List<?>) attachments).isEmpty();
         String s = attachments.toString().trim();
         return s.isEmpty() || "[]".equals(s);
+    }
+
+    private String normalizeBugStatus(Object status)
+    {
+        return "resolved".equals(asStr(status)) ? "resolved" : "open";
+    }
+
+    private String bugStatusLabel(String status)
+    {
+        return "resolved".equals(status) ? "已解决" : "未解决";
     }
 
     private String dash(String s)

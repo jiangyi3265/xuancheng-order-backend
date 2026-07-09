@@ -12,6 +12,8 @@ public class JiedanBug
     private String content;
     /** 附件（JSON 字符串） */
     private String attachments;
+    /** 状态：open 未解决，resolved 已解决 */
+    private String status;
     private String createdBy;
     private Date createTime;
 
@@ -23,6 +25,8 @@ public class JiedanBug
     public void setContent(String content) { this.content = content; }
     public String getAttachments() { return attachments; }
     public void setAttachments(String attachments) { this.attachments = attachments; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
     public Date getCreateTime() { return createTime; }
