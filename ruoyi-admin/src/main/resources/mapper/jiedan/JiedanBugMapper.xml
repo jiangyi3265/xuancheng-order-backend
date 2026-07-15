@@ -33,6 +33,10 @@
         update jiedan_bug set status = #{status} where id = #{id}
     </update>
 
+    <update id="updateAttachments">
+        update jiedan_bug set attachments = #{attachments} where id = #{id}
+    </update>
+
     <delete id="deleteById" parameterType="Long">
         delete from jiedan_bug where id = #{id}
     </delete>

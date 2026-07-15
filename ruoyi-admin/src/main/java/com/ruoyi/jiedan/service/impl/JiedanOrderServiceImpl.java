@@ -26,6 +26,7 @@ import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
 import com.ruoyi.jiedan.mapper.JiedanSettingMapper;
 import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
+import com.ruoyi.jiedan.service.JiedanAttachmentStorage;
 import com.ruoyi.jiedan.service.JiedanPushService;
 
 @Service
@@ -48,6 +49,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanPushService pushService;
+
+    @Autowired
+    private JiedanAttachmentStorage attachmentStorage;
 
     private static final List<Long> MEMBER_IDS = Arrays.asList(1L, 2L);
 
@@ -77,9 +81,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     public List<Map<String, Object>> listVO()
     {
         List<Map<String, Object>> list = new ArrayList<>();
-        for (JiedanOrder o : orderMapper.selectAll())
+        for (Map<String, Object> row : orderMapper.selectAdminSummaries())
         {
-            list.add(toVO(o, true));
+            list.add(toAdminListSummaryVO(row));
         }
         return list;
     }
@@ -105,11 +109,23 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     @Override
+    public Map<String, Object> getVersion(Long id)
+    {
+        return versionVO(id, orderMapper.selectVersionById(id));
+    }
+
+    @Override
     public Map<String, Object> getForCustomer(Long id, String account)
     {
         JiedanOrder o = orderMapper.selectById(id);
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
         return toVO(o, false);
+    }
+
+    @Override
+    public Map<String, Object> getVersionForCustomer(Long id, String account)
+    {
+        return versionVO(id, orderMapper.selectVersionForCustomer(id, account));
     }
 
     // ---------- 客户留言：老板与员工同时收到并标记未读 ----------
@@ -252,6 +268,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long orderId = bug.getOrderId();
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
+        touchOrder(orderId, new Date());
         return getVO(orderId);
     }
 
@@ -326,6 +343,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(o.getId());
+        upd.setUnread(join(MEMBER_IDS));
+        upd.setUpdateTime(new Date());
+        orderMapper.update(upd);
         return getForCustomer(o.getId(), account);
     }
 
@@ -383,7 +405,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Map<String, Object> vo = new LinkedHashMap<>();
         vo.put("id", id);
         vo.put("notes", o == null ? "" : strOr(o.getNotes(), ""));
-        vo.put("noteAttachments", o == null ? new ArrayList<>() : parseArr(o.getNoteAttachments()));
+        vo.put("noteAttachments", o == null ? new ArrayList<>()
+                : normalizedAttachments(o.getNoteAttachments(), "note", id));
         return vo;
     }
 
@@ -449,13 +472,15 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (o != null && memberId != null)
         {
             List<Long> unread = parseUnread(o.getUnread());
-            unread.remove(memberId);
-            JiedanOrder upd = new JiedanOrder();
-            upd.setId(id);
-            upd.setUnread(join(unread));
-            orderMapper.update(upd);
+            if (unread.remove(memberId))
+            {
+                JiedanOrder upd = new JiedanOrder();
+                upd.setId(id);
+                upd.setUnread(join(unread));
+                orderMapper.update(upd);
+            }
         }
-        return getVO(id);
+        return getVersion(id);
     }
 
     // ---------- 改稿 +1 ----------
@@ -624,6 +649,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         orderMapper.update(upd);
     }
 
+    private void touchOrder(Long orderId, Date now)
+    {
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(orderId);
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+    }
+
     private Map<String, Object> toVO(JiedanOrder o, boolean includeInternal)
     {
         Map<String, Object> vo = new LinkedHashMap<>();
@@ -642,9 +675,17 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("requirement", o.getRequirement());
         vo.put("paid", o.getPaid() != null && o.getPaid() == 1);
         vo.put("revisions", o.getRevisions() == null ? 0 : o.getRevisions());
+        vo.put("version", o.getVersion() == null ? 0 : o.getVersion());
         vo.put("createTime", fmt(o.getCreateTime()));
-        vo.put("attachments", parseArr(o.getAttachments()));
+        vo.put("updateTime", fmt(o.getUpdateTime()));
+        vo.put("attachments", normalizedAttachments(o.getAttachments(), "order", o.getId()));
         vo.put("unread", parseUnread(o.getUnread()));
+
+        Map<Long, List<JiedanBugUpdate>> updatesByBug = new LinkedHashMap<>();
+        for (JiedanBugUpdate update : bugUpdateMapper.selectByOrderId(o.getId()))
+        {
+            updatesByBug.computeIfAbsent(update.getBugId(), k -> new ArrayList<>()).add(update);
+        }
 
         List<Map<String, Object>> bugs = new ArrayList<>();
         for (JiedanBug b : bugMapper.selectByOrderId(o.getId()))
@@ -653,19 +694,19 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("id", b.getId());
             bm.put("orderId", b.getOrderId());
             bm.put("content", b.getContent());
-            bm.put("attachments", parseArr(b.getAttachments()));
+            bm.put("attachments", normalizedAttachments(b.getAttachments(), "bug", b.getId()));
             bm.put("status", normalizeBugStatus(b.getStatus()));
             bm.put("createdBy", displayMemberName(b.getCreatedBy()));
             bm.put("time", fmt(b.getCreateTime()));
 
             List<Map<String, Object>> updates = new ArrayList<>();
-            for (JiedanBugUpdate u : bugUpdateMapper.selectByBugId(b.getId()))
+            for (JiedanBugUpdate u : updatesByBug.getOrDefault(b.getId(), new ArrayList<>()))
             {
                 Map<String, Object> um = new LinkedHashMap<>();
                 um.put("id", u.getId());
                 um.put("bugId", u.getBugId());
                 um.put("content", u.getContent());
-                um.put("attachments", parseArr(u.getAttachments()));
+                um.put("attachments", normalizedAttachments(u.getAttachments(), "bugUpdate", u.getId()));
                 um.put("createdBy", displayMemberName(u.getCreatedBy()));
                 um.put("time", fmt(u.getCreateTime()));
                 updates.add(um);
@@ -680,11 +721,12 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         {
             if (!includeInternal && !isChatType(t.getType())) continue;
             Map<String, Object> tm = new LinkedHashMap<>();
+            tm.put("id", t.getId());
             tm.put("time", fmt(t.getCreateTime()));
             tm.put("user", displayMemberName(t.getUserName()));
             tm.put("type", t.getType());
             tm.put("content", t.getContent());
-            tm.put("attachments", parseArr(t.getAttachments()));
+            tm.put("attachments", normalizedAttachments(t.getAttachments(), "timeline", t.getId()));
             tl.add(tm);
         }
         vo.put("timeline", tl);
@@ -708,6 +750,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("requirement", row.get("requirement"));
         vo.put("paid", asBool(row.get("paid")));
         vo.put("revisions", row.get("revisions") == null ? 0 : row.get("revisions"));
+        vo.put("version", row.get("version") == null ? 0 : row.get("version"));
         vo.put("createTime", fmtIfDate(row.get("createTime")));
         vo.put("updateTime", fmtIfDate(row.get("updateTime")));
         vo.put("messageCount", row.get("messageCount") == null ? 0 : row.get("messageCount"));
@@ -719,11 +762,44 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             last.put("type", lastType);
             last.put("user", displayMemberName(asStr(row.get("lastMessageUser"))));
             last.put("content", row.get("lastMessageContent"));
-            last.put("attachments", parseArr(asStr(row.get("lastMessageAttachments"))));
+            last.put("hasAttachments", asBool(row.get("lastMessageHasAttachments")));
             last.put("time", fmtIfDate(row.get("lastMessageTime")));
             vo.put("lastMessage", last);
         }
         return vo;
+    }
+
+    private Map<String, Object> toAdminListSummaryVO(Map<String, Object> row)
+    {
+        Map<String, Object> vo = toListSummaryVO(row);
+        vo.put("contact", row.get("contact"));
+        vo.put("unread", parseUnread(asStr(row.get("unread"))));
+        vo.put("attachmentCount", row.get("attachmentCount") == null ? 0 : row.get("attachmentCount"));
+        vo.put("bugCount", row.get("bugCount") == null ? 0 : row.get("bugCount"));
+        return vo;
+    }
+
+    private Map<String, Object> versionVO(Long id, Long version)
+    {
+        if (version == null) return null;
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", id);
+        vo.put("version", version);
+        return vo;
+    }
+
+    private Object normalizedAttachments(String json, String ownerType, Long ownerId)
+    {
+        JiedanAttachmentStorage.NormalizedAttachments normalized = attachmentStorage.normalize(json);
+        if (normalized.isChanged())
+        {
+            if ("order".equals(ownerType)) orderMapper.updateAttachmentsOnly(ownerId, normalized.getJson());
+            else if ("note".equals(ownerType)) orderMapper.updateNoteAttachmentsOnly(ownerId, normalized.getJson());
+            else if ("bug".equals(ownerType)) bugMapper.updateAttachments(ownerId, normalized.getJson());
+            else if ("bugUpdate".equals(ownerType)) bugUpdateMapper.updateAttachments(ownerId, normalized.getJson());
+            else if ("timeline".equals(ownerType)) timelineMapper.updateAttachments(ownerId, normalized.getJson());
+        }
+        return normalized.getItems();
     }
 
     private boolean isChatType(String type)
@@ -795,12 +871,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         List<String> s = new ArrayList<>();
         for (Long id : ids) s.add(String.valueOf(id));
         return String.join(",", s);
-    }
-
-    private Object parseArr(String json)
-    {
-        if (json == null || json.trim().isEmpty()) return new ArrayList<>();
-        try { return JSON.parseArray(json); } catch (Exception e) { return new ArrayList<>(); }
     }
 
     private String jsonStr(Object o)

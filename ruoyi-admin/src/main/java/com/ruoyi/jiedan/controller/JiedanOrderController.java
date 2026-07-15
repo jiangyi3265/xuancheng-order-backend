@@ -44,6 +44,14 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.getVO(id));
     }
 
+    @GetMapping("/{id}/version")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult version(@PathVariable Long id)
+    {
+        Map<String, Object> vo = service.getVersion(id);
+        return vo == null ? AjaxResult.error("项目不存在") : AjaxResult.success(vo);
+    }
+
     @PostMapping
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult add(@RequestBody Map<String, Object> body)

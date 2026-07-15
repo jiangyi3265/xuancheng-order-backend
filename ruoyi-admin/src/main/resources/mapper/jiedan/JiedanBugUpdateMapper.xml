@@ -19,10 +19,22 @@
         select <include refid="cols"/> from jiedan_bug_update where bug_id = #{bugId} order by id asc
     </select>
 
+    <select id="selectByOrderId" parameterType="Long" resultMap="JiedanBugUpdateResult">
+        select u.id, u.bug_id, u.content, u.attachments, u.created_by, u.create_time
+        from jiedan_bug_update u
+        join jiedan_bug b on b.id = u.bug_id
+        where b.order_id = #{orderId}
+        order by u.id asc
+    </select>
+
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBugUpdate" useGeneratedKeys="true" keyProperty="id">
         insert into jiedan_bug_update (bug_id, content, attachments, created_by, create_time)
         values (#{bugId}, #{content}, #{attachments}, #{createdBy}, #{createTime})
     </insert>
+
+    <update id="updateAttachments">
+        update jiedan_bug_update set attachments = #{attachments} where id = #{id}
+    </update>
 
     <delete id="deleteByBugId" parameterType="Long">
         delete from jiedan_bug_update where bug_id = #{bugId}

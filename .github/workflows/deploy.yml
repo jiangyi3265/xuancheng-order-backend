@@ -81,7 +81,7 @@ jobs:
             }
 
             configure_java
-            mkdir -p "$APP_DIR"
+            mkdir -p "$APP_DIR" "$APP_DIR/uploadPath/jiedan-media"
             test -s "$APP_DIR/$JAR_NAME"
             test -s "/tmp/backend-deploy/backend-patch.tar.gz"
 
@@ -127,6 +127,16 @@ jobs:
 
             ALTER TABLE jiedan_order
               MODIFY customer_account VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT '';
+
+            SET @sql = IF(
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'jiedan_order' AND COLUMN_NAME = 'version') = 0,
+              'ALTER TABLE jiedan_order ADD COLUMN version BIGINT NOT NULL DEFAULT 0 AFTER revisions',
+              'SELECT 1'
+            );
+            PREPARE stmt FROM @sql;
+            EXECUTE stmt;
+            DEALLOCATE PREPARE stmt;
 
             SET @sql = IF(
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
@@ -308,7 +318,11 @@ jobs:
             EXTRA_ARGS_SCRIPT="$EXTRA_ARGS_SCRIPT
             EXTRA_ARGS+=(--spring.datasource.druid.master.url=jdbc:mysql://127.0.0.1:3306/xc_jiedan?useUnicode=true\\&characterEncoding=utf8\\&zeroDateTimeBehavior=convertToNull\\&useSSL=false\\&serverTimezone=GMT%2B8)
             EXTRA_ARGS+=(--spring.datasource.druid.master.username=xc_app)
-            EXTRA_ARGS+=(--spring.datasource.druid.master.password=$(printf '%q' "$APP_DB_PASSWORD"))"
+            EXTRA_ARGS+=(--spring.datasource.druid.master.password=$(printf '%q' "$APP_DB_PASSWORD"))
+            EXTRA_ARGS+=(--ruoyi.profile=$(printf '%q' "$APP_DIR/uploadPath"))
+            EXTRA_ARGS+=(--token.expireTime=10080)
+            EXTRA_ARGS+=(--spring.servlet.multipart.max-file-size=50MB)
+            EXTRA_ARGS+=(--spring.servlet.multipart.max-request-size=100MB)"
             echo "reused datasource args: $(printf '%s\n' "$EXTRA_ARGS_SCRIPT" | grep -c '^EXTRA_ARGS+=' || true)"
 
             cat > "$APP_DIR/start.sh" <<SCRIPT

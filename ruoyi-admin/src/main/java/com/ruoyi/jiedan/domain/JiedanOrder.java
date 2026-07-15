@@ -32,6 +32,8 @@ public class JiedanOrder
     private String unread;
     private Integer paid;
     private Integer revisions;
+    /** 数据版本，每次项目内容变化自动递增，用于轻量实时同步 */
+    private Long version;
     private Date createTime;
     private Date updateTime;
 
@@ -73,6 +75,8 @@ public class JiedanOrder
     public void setPaid(Integer paid) { this.paid = paid; }
     public Integer getRevisions() { return revisions; }
     public void setRevisions(Integer revisions) { this.revisions = revisions; }
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
     public Date getCreateTime() { return createTime; }
     public void setCreateTime(Date createTime) { this.createTime = createTime; }
     public Date getUpdateTime() { return updateTime; }

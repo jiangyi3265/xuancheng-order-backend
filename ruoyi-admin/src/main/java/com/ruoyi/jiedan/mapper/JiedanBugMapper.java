@@ -14,6 +14,8 @@ public interface JiedanBugMapper
 
     int updateStatus(@Param("id") Long id, @Param("status") String status);
 
+    int updateAttachments(@Param("id") Long id, @Param("attachments") String attachments);
+
     int deleteById(Long id);
 
     int deleteByOrderId(Long orderId);

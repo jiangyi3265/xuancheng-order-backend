@@ -7,7 +7,12 @@ public interface JiedanBugUpdateMapper
 {
     List<JiedanBugUpdate> selectByBugId(Long bugId);
 
+    List<JiedanBugUpdate> selectByOrderId(Long orderId);
+
     int insert(JiedanBugUpdate update);
+
+    int updateAttachments(@org.apache.ibatis.annotations.Param("id") Long id,
+                          @org.apache.ibatis.annotations.Param("attachments") String attachments);
 
     int deleteByBugId(Long bugId);
 

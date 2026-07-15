@@ -9,5 +9,8 @@ public interface JiedanTimelineMapper
 
     int insert(JiedanTimeline timeline);
 
+    int updateAttachments(@org.apache.ibatis.annotations.Param("id") Long id,
+                          @org.apache.ibatis.annotations.Param("attachments") String attachments);
+
     int deleteByOrderId(Long orderId);
 }

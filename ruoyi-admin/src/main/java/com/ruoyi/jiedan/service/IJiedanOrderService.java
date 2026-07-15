@@ -9,11 +9,15 @@ public interface IJiedanOrderService
 
     Map<String, Object> getVO(Long id);
 
+    Map<String, Object> getVersion(Long id);
+
     /** 客户门户：列出某客户账号名下的项目 */
     List<Map<String, Object>> listByCustomer(String account);
 
     /** 客户门户：查看单个项目（校验归属，非本人返回 null） */
     Map<String, Object> getForCustomer(Long id, String account);
+
+    Map<String, Object> getVersionForCustomer(Long id, String account);
 
     /** 客户门户：客户留言（校验归属；老板+员工同时未读并推送） */
     Map<String, Object> customerMessage(Long orderId, String account, String customerName,

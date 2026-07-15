@@ -22,17 +22,65 @@
         <result property="unread"      column="unread"      />
         <result property="paid"        column="paid"        />
         <result property="revisions"   column="revisions"   />
+        <result property="version"     column="version"     />
         <result property="createTime"  column="create_time" />
         <result property="updateTime"  column="update_time" />
     </resultMap>
 
     <sql id="cols">
         id, order_no, title, channel, customer, customer_account, contact, amount, owner_id, status,
-        priority, deadline, requirement, attachments, unread, paid, revisions, create_time, update_time
+        priority, deadline, requirement, attachments, unread, paid, revisions, version, create_time, update_time
     </sql>
 
     <select id="selectAll" resultMap="JiedanOrderResult">
         select <include refid="cols"/> from jiedan_order order by id desc
+    </select>
+
+    <select id="selectAdminSummaries" resultType="java.util.LinkedHashMap">
+        select
+            o.id as id,
+            o.order_no as orderNo,
+            o.title as title,
+            o.channel as channel,
+            o.customer as customer,
+            o.customer_account as customerAccount,
+            o.contact as contact,
+            o.amount as amount,
+            o.owner_id as ownerId,
+            o.status as status,
+            o.priority as priority,
+            o.deadline as deadline,
+            o.requirement as requirement,
+            o.unread as unread,
+            o.paid as paid,
+            o.revisions as revisions,
+            o.version as version,
+            o.create_time as createTime,
+            o.update_time as updateTime,
+            case
+                when o.attachments is null or o.attachments = '' or json_valid(o.attachments) = 0 then 0
+                else json_length(o.attachments)
+            end as attachmentCount,
+            coalesce(bc.bug_count, 0) as bugCount,
+            coalesce(mc.message_count, 0) as messageCount,
+            lt.user_name as lastMessageUser,
+            lt.type as lastMessageType,
+            lt.content as lastMessageContent,
+            lt.create_time as lastMessageTime
+        from jiedan_order o
+        left join (
+            select order_id, count(*) as bug_count
+            from jiedan_bug
+            group by order_id
+        ) bc on bc.order_id = o.id
+        left join (
+            select order_id, count(*) as message_count, max(id) as last_id
+            from jiedan_timeline
+            where type in ('message', 'reply')
+            group by order_id
+        ) mc on mc.order_id = o.id
+        left join jiedan_timeline lt on lt.id = mc.last_id
+        order by o.id desc
     </select>
 
     <select id="selectByCustomerAccount" parameterType="String" resultMap="JiedanOrderResult">
@@ -56,13 +104,14 @@
             o.requirement as requirement,
             o.paid as paid,
             o.revisions as revisions,
+            o.version as version,
             o.create_time as createTime,
             o.update_time as updateTime,
             coalesce(mc.message_count, 0) as messageCount,
             lt.user_name as lastMessageUser,
             lt.type as lastMessageType,
             lt.content as lastMessageContent,
-            lt.attachments as lastMessageAttachments,
+            case when lt.attachments is null or lt.attachments = '' or lt.attachments = '[]' then 0 else 1 end as lastMessageHasAttachments,
             lt.create_time as lastMessageTime
         from jiedan_order o
         left join (
@@ -76,6 +125,15 @@
         left join jiedan_timeline lt on lt.id = mc.last_id
         where o.customer_account = #{customerAccount}
         order by o.id desc
+    </select>
+
+    <select id="selectVersionById" parameterType="Long" resultType="Long">
+        select version from jiedan_order where id = #{id}
+    </select>
+
+    <select id="selectVersionForCustomer" resultType="Long">
+        select version from jiedan_order
+        where id = #{id} and customer_account = #{customerAccount}
     </select>
 
     <select id="selectById" parameterType="Long" resultMap="JiedanOrderResult">
@@ -118,8 +176,17 @@
             <if test="paid != null">paid = #{paid},</if>
             <if test="revisions != null">revisions = #{revisions},</if>
             <if test="updateTime != null">update_time = #{updateTime},</if>
+            version = version + 1
         </set>
         where id = #{id}
+    </update>
+
+    <update id="updateAttachmentsOnly">
+        update jiedan_order set attachments = #{attachments} where id = #{id}
+    </update>
+
+    <update id="updateNoteAttachmentsOnly">
+        update jiedan_order set note_attachments = #{attachments} where id = #{id}
     </update>
 
     <delete id="deleteById" parameterType="Long">

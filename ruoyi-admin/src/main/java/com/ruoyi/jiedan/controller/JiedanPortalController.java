@@ -47,6 +47,13 @@ public class JiedanPortalController extends BaseController
         return AjaxResult.success(vo);
     }
 
+    @GetMapping("/orders/{id}/version")
+    public AjaxResult myOrderVersion(@PathVariable Long id)
+    {
+        Map<String, Object> vo = service.getVersionForCustomer(id, SecurityUtils.getUsername());
+        return vo == null ? AjaxResult.error("项目不存在或无权查看") : AjaxResult.success(vo);
+    }
+
     /** 客户删除自己提交的问题 */
     @DeleteMapping("/orders/{id}")
     public AjaxResult removeMyOrder(@PathVariable Long id)
