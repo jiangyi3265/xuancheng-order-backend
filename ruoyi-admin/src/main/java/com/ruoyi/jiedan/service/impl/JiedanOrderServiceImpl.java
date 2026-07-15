@@ -53,8 +53,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     private static final Map<Long, String> MEMBER_NAMES = new LinkedHashMap<Long, String>()
     {{
-        put(1L, "阿成");
-        put(2L, "阿伟");
+        put(1L, "尚琦凯");
+        put(2L, "费鹏飞");
+    }};
+
+    private static final Map<String, String> LEGACY_MEMBER_NAMES = new LinkedHashMap<String, String>()
+    {{
+        put("阿成", "尚琦凯");
+        put("阿伟", "费鹏飞");
     }};
 
     private static final Map<String, String> STATUS_LABELS = new LinkedHashMap<String, String>()
@@ -138,7 +144,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Date now = new Date();
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
 
         JiedanOrder o = new JiedanOrder();
         o.setTitle(strOr(asStr(p.get("title")), "未命名需求"));
@@ -229,7 +235,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
         Date now = new Date();
         insertBug(orderId, byName, asStr(p.get("content")), p.get("attachments"), now);
         touchUnread(orderId, by, now);
@@ -260,7 +266,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
         Date now = new Date();
         insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
         touchUnread(o.getId(), by, now);
@@ -281,7 +287,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugMapper.updateStatus(bugId, status);
 
         Long by = p == null ? null : asLong(p.get("byMemberId"));
-        String byName = strOr(p == null ? null : asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, p == null ? null : asStr(p.get("byUserName")));
         Date now = new Date();
         touchUnread(o.getId(), by, now);
         pushOthers(by, "Bug 状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)));
@@ -401,7 +407,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Long orderId = asLong(p.get("orderId"));
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
         String type = strOr(asStr(p.get("type")), "note");
         Date now = new Date();
         addTimeline(orderId, byName, type, asStr(p.get("content")), jsonStr(p.get("attachments")), now);
@@ -417,7 +423,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Long id = asLong(p.get("id"));
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
         String status = asStr(p.get("status"));
         Date now = new Date();
 
@@ -458,7 +464,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Long id = asLong(p.get("id"));
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
         Date now = new Date();
         JiedanOrder o = orderMapper.selectById(id);
         if (o == null) return null;
@@ -480,7 +486,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Long id = asLong(p.get("id"));
         Long by = asLong(p.get("byMemberId"));
-        String byName = strOr(asStr(p.get("byUserName")), MEMBER_NAMES.getOrDefault(by, "系统"));
+        String byName = memberName(by, asStr(p.get("byUserName")));
         Date now = new Date();
         JiedanOrder o = orderMapper.selectById(id);
         if (o == null) return null;
@@ -649,7 +655,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("content", b.getContent());
             bm.put("attachments", parseArr(b.getAttachments()));
             bm.put("status", normalizeBugStatus(b.getStatus()));
-            bm.put("createdBy", b.getCreatedBy());
+            bm.put("createdBy", displayMemberName(b.getCreatedBy()));
             bm.put("time", fmt(b.getCreateTime()));
 
             List<Map<String, Object>> updates = new ArrayList<>();
@@ -660,7 +666,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 um.put("bugId", u.getBugId());
                 um.put("content", u.getContent());
                 um.put("attachments", parseArr(u.getAttachments()));
-                um.put("createdBy", u.getCreatedBy());
+                um.put("createdBy", displayMemberName(u.getCreatedBy()));
                 um.put("time", fmt(u.getCreateTime()));
                 updates.add(um);
             }
@@ -675,7 +681,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             if (!includeInternal && !isChatType(t.getType())) continue;
             Map<String, Object> tm = new LinkedHashMap<>();
             tm.put("time", fmt(t.getCreateTime()));
-            tm.put("user", t.getUserName());
+            tm.put("user", displayMemberName(t.getUserName()));
             tm.put("type", t.getType());
             tm.put("content", t.getContent());
             tm.put("attachments", parseArr(t.getAttachments()));
@@ -711,7 +717,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         {
             Map<String, Object> last = new LinkedHashMap<>();
             last.put("type", lastType);
-            last.put("user", row.get("lastMessageUser"));
+            last.put("user", displayMemberName(asStr(row.get("lastMessageUser"))));
             last.put("content", row.get("lastMessageContent"));
             last.put("attachments", parseArr(asStr(row.get("lastMessageAttachments"))));
             last.put("time", fmtIfDate(row.get("lastMessageTime")));
@@ -723,6 +729,17 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private boolean isChatType(String type)
     {
         return "message".equals(type) || "reply".equals(type);
+    }
+
+    private String memberName(Long memberId, String fallback)
+    {
+        if (memberId != null && MEMBER_NAMES.containsKey(memberId)) return MEMBER_NAMES.get(memberId);
+        return displayMemberName(strOr(fallback, "系统"));
+    }
+
+    private String displayMemberName(String name)
+    {
+        return name == null ? null : LEGACY_MEMBER_NAMES.getOrDefault(name, name);
     }
 
     private boolean isBlankBug(Object content, Object attachments)
