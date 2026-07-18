@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.ai.mapper.AiProjectMapper">
+    <resultMap id="ProjectResult" type="com.ruoyi.jiedan.ai.domain.AiProject">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="repoUrl" column="repo_url"/>
+        <result property="defaultBranch" column="default_branch"/>
+        <result property="provider" column="provider"/>
+        <result property="model" column="model"/>
+        <result property="profileKey" column="profile_key"/>
+        <result property="validationCommands" column="validation_commands"/>
+        <result property="forbiddenPaths" column="forbidden_paths"/>
+        <result property="maxParallel" column="max_parallel"/>
+        <result property="enabled" column="enabled"/>
+        <result property="version" column="version"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updatedBy" column="updated_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="cols">id, name, repo_url, default_branch, provider, model, profile_key,
+        validation_commands, forbidden_paths, max_parallel, enabled, version,
+        created_by, create_time, updated_by, update_time</sql>
+
+    <select id="selectList" resultType="java.util.LinkedHashMap">
+        select p.id, p.name, p.repo_url as repoUrl, p.default_branch as defaultBranch,
+               p.provider, p.model, p.profile_key as profileKey, p.max_parallel as maxParallel,
+               p.enabled, p.version, p.update_time as updateTime,
+               sum(case when t.status in ('queued','claimed','running') then 1 else 0 end) as activeTaskCount,
+               sum(case when t.status = 'awaiting_review' then 1 else 0 end) as reviewTaskCount
+        from ai_project p
+        left join ai_task t on t.project_id = p.id
+        <where>
+            <if test="keyword != null and keyword != ''">
+                (p.name like concat('%', #{keyword}, '%') or p.repo_url like concat('%', #{keyword}, '%'))
+            </if>
+            <if test="enabled != null">and p.enabled = #{enabled}</if>
+        </where>
+        group by p.id
+        order by p.enabled desc, p.update_time desc, p.id desc
+    </select>
+
+    <select id="selectById" parameterType="Long" resultMap="ProjectResult">
+        select <include refid="cols"/> from ai_project where id = #{id}
+    </select>
+
+    <select id="selectByIdForUpdate" parameterType="Long" resultMap="ProjectResult">
+        select <include refid="cols"/> from ai_project where id = #{id} for update
+    </select>
+
+    <insert id="insert" parameterType="com.ruoyi.jiedan.ai.domain.AiProject" useGeneratedKeys="true" keyProperty="id">
+        insert into ai_project
+        (name, repo_url, default_branch, provider, model, profile_key, validation_commands,
+         forbidden_paths, max_parallel, enabled, version, created_by, create_time, updated_by, update_time)
+        values
+        (#{name}, #{repoUrl}, #{defaultBranch}, #{provider}, #{model}, #{profileKey}, #{validationCommands},
+         #{forbiddenPaths}, #{maxParallel}, #{enabled}, 1, #{createdBy}, #{createTime}, #{updatedBy}, #{updateTime})
+    </insert>
+
+    <update id="update" parameterType="com.ruoyi.jiedan.ai.domain.AiProject">
+        update ai_project
+        set name = #{name}, repo_url = #{repoUrl}, default_branch = #{defaultBranch},
+            provider = #{provider}, model = #{model}, profile_key = #{profileKey},
+            validation_commands = #{validationCommands}, forbidden_paths = #{forbiddenPaths},
+            max_parallel = #{maxParallel}, enabled = #{enabled}, updated_by = #{updatedBy},
+            update_time = #{updateTime}, version = version + 1
+        where id = #{id} and version = #{version}
+    </update>
+</mapper>

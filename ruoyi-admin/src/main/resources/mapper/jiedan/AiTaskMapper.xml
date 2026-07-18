@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.ai.mapper.AiTaskMapper">
+    <resultMap id="TaskResult" type="com.ruoyi.jiedan.ai.domain.AiTask">
+        <id property="id" column="id"/>
+        <result property="projectId" column="project_id"/>
+        <result property="orderId" column="order_id"/>
+        <result property="bugId" column="bug_id"/>
+        <result property="title" column="title"/>
+        <result property="prompt" column="prompt"/>
+        <result property="promptHash" column="prompt_hash"/>
+        <result property="promptVersion" column="prompt_version"/>
+        <result property="riskLevel" column="risk_level"/>
+        <result property="status" column="status"/>
+        <result property="currentAttemptId" column="current_attempt_id"/>
+        <result property="approvedAttemptId" column="approved_attempt_id"/>
+        <result property="approvedHeadSha" column="approved_head_sha"/>
+        <result property="approvedDiffSha" column="approved_diff_sha"/>
+        <result property="version" column="version"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updatedBy" column="updated_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="cols">id, project_id, order_id, bug_id, title, prompt, prompt_hash, prompt_version,
+        risk_level, status, current_attempt_id, approved_attempt_id, approved_head_sha,
+        approved_diff_sha, version, created_by, create_time, updated_by, update_time</sql>
+
+    <select id="selectList" resultType="java.util.LinkedHashMap">
+        select t.id, t.project_id as projectId, p.name as projectName, t.order_id as orderId,
+               t.bug_id as bugId, t.title, t.risk_level as riskLevel, t.status,
+               t.current_attempt_id as currentAttemptId, t.version, t.created_by as createdBy,
+               t.create_time as createTime, t.update_time as updateTime,
+               a.worker_id as workerId, a.pr_url as prUrl, a.validation_passed as validationPassed,
+               a.error_message as errorMessage
+        from ai_task t
+        join ai_project p on p.id = t.project_id
+        left join ai_attempt a on a.id = t.current_attempt_id
+        <where>
+            <if test="projectId != null">t.project_id = #{projectId}</if>
+            <if test="status != null and status != ''">and t.status = #{status}</if>
+            <if test="keyword != null and keyword != ''">
+                and (t.title like concat('%', #{keyword}, '%') or cast(t.id as char) = #{keyword})
+            </if>
+        </where>
+        order by t.id desc
+    </select>
+
+    <select id="selectDetail" parameterType="Long" resultType="java.util.LinkedHashMap">
+        select t.id, t.project_id as projectId, p.name as projectName, p.repo_url as repoUrl,
+               t.order_id as orderId, t.bug_id as bugId, t.title, t.prompt,
+               t.prompt_hash as promptHash, t.prompt_version as promptVersion,
+               t.risk_level as riskLevel, t.status, t.current_attempt_id as currentAttemptId,
+               t.approved_attempt_id as approvedAttemptId, t.approved_head_sha as approvedHeadSha,
+               t.approved_diff_sha as approvedDiffSha, t.version, t.created_by as createdBy,
+               t.create_time as createTime, t.updated_by as updatedBy, t.update_time as updateTime
+        from ai_task t join ai_project p on p.id = t.project_id where t.id = #{id}
+    </select>
+
+    <select id="selectById" parameterType="Long" resultMap="TaskResult">
+        select <include refid="cols"/> from ai_task where id = #{id}
+    </select>
+
+    <insert id="insert" parameterType="com.ruoyi.jiedan.ai.domain.AiTask" useGeneratedKeys="true" keyProperty="id">
+        insert into ai_task
+        (project_id, order_id, bug_id, title, prompt, prompt_hash, prompt_version, risk_level,
+         status, version, created_by, create_time, updated_by, update_time)
+        values
+        (#{projectId}, #{orderId}, #{bugId}, #{title}, #{prompt}, #{promptHash}, #{promptVersion},
+         #{riskLevel}, #{status}, 1, #{createdBy}, #{createTime}, #{updatedBy}, #{updateTime})
+    </insert>
+
+    <update id="queue">
+        update ai_task set status = 'queued', current_attempt_id = null, updated_by = #{updatedBy},
+            update_time = now(), version = version + 1
+        where id = #{id} and status in ('draft','failed','rejected')
+    </update>
+
+    <update id="claim">
+        update ai_task set status = 'claimed', updated_by = #{updatedBy}, update_time = now(), version = version + 1
+        where id = #{id} and status = 'queued' and version = #{version}
+    </update>
+
+    <update id="bindAttempt">
+        update ai_task set current_attempt_id = #{attemptId}, update_time = now()
+        where id = #{id} and status = 'claimed' and current_attempt_id is null
+    </update>
+
+    <update id="markRunning">
+        update ai_task set status = 'running', update_time = now()
+        where id = #{id} and current_attempt_id = #{attemptId} and status = 'claimed'
+    </update>
+
+    <update id="markAwaitingReview">
+        update ai_task set status = 'awaiting_review', update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running')
+    </update>
+
+    <update id="markFailed">
+        update ai_task set status = 'failed', update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running')
+    </update>
+
+    <update id="requeueExpired">
+        update ai_task set status = 'queued', current_attempt_id = null, update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running')
+    </update>
+
+    <update id="approve">
+        update ai_task set status = 'approved', approved_attempt_id = #{attemptId},
+            approved_head_sha = #{headSha}, approved_diff_sha = #{diffSha}, updated_by = #{updatedBy},
+            update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status = 'awaiting_review'
+    </update>
+
+    <update id="reject">
+        update ai_task set status = 'rejected', updated_by = #{updatedBy}, update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status = 'awaiting_review'
+    </update>
+
+    <update id="cancel">
+        update ai_task set status = 'cancelled', updated_by = #{updatedBy}, update_time = now(), version = version + 1
+        where id = #{id} and status in ('draft','queued','claimed','running','awaiting_review','failed','rejected')
+    </update>
+
+    <select id="selectCandidates" resultType="java.util.LinkedHashMap">
+        select t.id as taskId, t.version as taskVersion, t.title, t.prompt_hash as promptHash,
+               p.id as projectId, p.name as projectName, p.repo_url as repoUrl,
+               p.default_branch as defaultBranch, p.profile_key as profileKey,
+               p.provider, p.model
+        from ai_task t
+        join ai_project p on p.id = t.project_id
+        where t.status = 'queued' and p.enabled = 1
+          and (select count(*) from ai_attempt aa join ai_task tt on tt.id = aa.task_id
+               where tt.project_id = p.id and aa.status in ('claimed','running')) &lt; p.max_parallel
+        order by case t.risk_level when 'low' then 1 when 'medium' then 2 else 3 end, t.id asc
+        limit #{limit}
+    </select>
+</mapper>

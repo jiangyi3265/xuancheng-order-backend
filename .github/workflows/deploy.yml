@@ -1,6 +1,14 @@
 name: Deploy backend
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy.yml'
+      - 'deploy/add_ai_pipeline_v13.sql'
+      - 'pom.xml'
+      - 'ruoyi-*/**'
   workflow_dispatch:
 
 concurrency:
@@ -33,13 +41,14 @@ jobs:
       - name: Prepare backend patch
         run: |
           set -euo pipefail
-          rm -rf backend-patch backend-patch.tar.gz
+          rm -rf backend-patch backend-patch.tar.gz ai-schema.sql
           mkdir -p backend-patch/BOOT-INF/classes/com/ruoyi
           mkdir -p backend-patch/BOOT-INF/classes/mapper
           cp -R ruoyi-admin/target/classes/com/ruoyi/jiedan backend-patch/BOOT-INF/classes/com/ruoyi/
           cp -R ruoyi-admin/target/classes/mapper/jiedan backend-patch/BOOT-INF/classes/mapper/
+          cp deploy/add_ai_pipeline_v13.sql ai-schema.sql
           tar -czf backend-patch.tar.gz -C backend-patch .
-          ls -lh backend-patch.tar.gz
+          ls -lh backend-patch.tar.gz ai-schema.sql
 
       - name: Upload patch
         uses: appleboy/scp-action@v0.1.7
@@ -48,7 +57,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          source: backend-patch.tar.gz
+          source: backend-patch.tar.gz,ai-schema.sql
           target: /tmp/backend-deploy
           overwrite: true
 
@@ -59,15 +68,27 @@ jobs:
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           JAR_NAME: ${{ env.JAR_NAME }}
           APP_DB_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          AI_WORKER_PASSWORD_HASH: ${{ secrets.AI_WORKER_PASSWORD_HASH }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_DIR,SERVICE_NAME,JAR_NAME,APP_DB_PASSWORD
+          envs: APP_DIR,SERVICE_NAME,JAR_NAME,APP_DB_PASSWORD,AI_WORKER_PASSWORD_HASH
           command_timeout: 5m
           script: |
             set -e
+
+            ROLLBACK_NEEDED=0
+            rollback_backend() {
+              trap - ERR
+              if [ "$ROLLBACK_NEEDED" = "1" ] && [ -s "$APP_DIR/$JAR_NAME.bak" ]; then
+                echo "deployment failed; restoring previous backend jar" >&2
+                cp "$APP_DIR/$JAR_NAME.bak" "$APP_DIR/$JAR_NAME"
+                systemctl restart "$SERVICE_NAME" || true
+              fi
+            }
+            trap rollback_backend ERR
 
             configure_java() {
               for candidate in /usr/lib/jvm/*17* /usr/lib/jvm/*11*; do
@@ -259,9 +280,41 @@ jobs:
               SET customer_account = 'hailan'
               WHERE id = 2 AND (customer_account IS NULL OR customer_account = '');
             SQL
+            test -s /tmp/backend-deploy/ai-schema.sql
+            run_schema_sql < /tmp/backend-deploy/ai-schema.sql
+            test -n "$AI_WORKER_PASSWORD_HASH"
+            run_schema_sql <<SQL
+            INSERT INTO sys_user
+              (dept_id, user_name, nick_name, user_type, email, phonenumber, sex, avatar, password,
+               status, del_flag, login_ip, login_date, pwd_update_date, create_by, create_time,
+               update_by, update_time, remark)
+            SELECT NULL, 'aiworker', 'AI Worker', '00', '', '', '2', '', '$AI_WORKER_PASSWORD_HASH',
+                   '0', '0', '', NULL, NOW(), 'system', NOW(), 'system', NOW(),
+                   'AI coding worker service account'
+              WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE user_name = 'aiworker');
+            UPDATE sys_user
+              SET password = '$AI_WORKER_PASSWORD_HASH', status = '0', del_flag = '0',
+                  pwd_update_date = NOW(), update_by = 'system', update_time = NOW()
+              WHERE user_name = 'aiworker';
+            INSERT IGNORE INTO sys_user_role (user_id, role_id)
+              SELECT u.user_id, r.role_id
+                FROM sys_user u JOIN sys_role r ON r.role_key = 'ai_worker'
+                WHERE u.user_name = 'aiworker';
+            DELETE ur FROM sys_user_role ur
+              JOIN sys_user u ON u.user_id = ur.user_id
+              JOIN sys_role r ON r.role_id = ur.role_id
+              WHERE u.user_name = 'aiworker' AND r.role_key <> 'ai_worker';
+            SQL
+            run_schema_sql <<'SQL'
+            SELECT COUNT(*) AS ai_table_count
+              FROM information_schema.tables
+              WHERE table_schema = DATABASE() AND table_name LIKE 'ai\_%';
+            SELECT role_id, role_key, status FROM sys_role WHERE role_key = 'ai_worker';
+            SQL
             echo "database schema migration ok"
 
             cp "$APP_DIR/$JAR_NAME" "$APP_DIR/$JAR_NAME.bak"
+            ROLLBACK_NEEDED=1
             PATCH_DIR="$(mktemp -d)"
             tar -xzf /tmp/backend-deploy/backend-patch.tar.gz -C "$PATCH_DIR"
             python3 - "$APP_DIR/$JAR_NAME" "$PATCH_DIR" <<'PY'
@@ -357,4 +410,7 @@ jobs:
             systemctl restart "$SERVICE_NAME"
             sleep 15
             systemctl is-active --quiet "$SERVICE_NAME"
+            curl --fail --silent --show-error --max-time 15 http://127.0.0.1:8091/captchaImage >/dev/null
             journalctl -u "$SERVICE_NAME" -n 80 --no-pager
+            ROLLBACK_NEEDED=0
+            trap - ERR
