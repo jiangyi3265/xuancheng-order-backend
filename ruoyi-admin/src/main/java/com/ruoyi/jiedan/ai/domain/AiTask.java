@@ -14,11 +14,19 @@ public class AiTask
     private String promptHash;
     private Integer promptVersion;
     private String riskLevel;
+    private String sourceType;
+    private Long sourceId;
     private String status;
     private Long currentAttemptId;
     private Long approvedAttemptId;
     private String approvedHeadSha;
     private String approvedDiffSha;
+    private String deliveryStatus;
+    private String mergedSha;
+    private String deploymentUrl;
+    private String deliveryUrl;
+    private String deliveryError;
+    private Date deliveredAt;
     private Integer version;
     private String createdBy;
     private Date createTime;
@@ -43,6 +51,10 @@ public class AiTask
     public void setPromptVersion(Integer promptVersion) { this.promptVersion = promptVersion; }
     public String getRiskLevel() { return riskLevel; }
     public void setRiskLevel(String riskLevel) { this.riskLevel = riskLevel; }
+    public String getSourceType() { return sourceType; }
+    public void setSourceType(String sourceType) { this.sourceType = sourceType; }
+    public Long getSourceId() { return sourceId; }
+    public void setSourceId(Long sourceId) { this.sourceId = sourceId; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public Long getCurrentAttemptId() { return currentAttemptId; }
@@ -53,6 +65,18 @@ public class AiTask
     public void setApprovedHeadSha(String approvedHeadSha) { this.approvedHeadSha = approvedHeadSha; }
     public String getApprovedDiffSha() { return approvedDiffSha; }
     public void setApprovedDiffSha(String approvedDiffSha) { this.approvedDiffSha = approvedDiffSha; }
+    public String getDeliveryStatus() { return deliveryStatus; }
+    public void setDeliveryStatus(String deliveryStatus) { this.deliveryStatus = deliveryStatus; }
+    public String getMergedSha() { return mergedSha; }
+    public void setMergedSha(String mergedSha) { this.mergedSha = mergedSha; }
+    public String getDeploymentUrl() { return deploymentUrl; }
+    public void setDeploymentUrl(String deploymentUrl) { this.deploymentUrl = deploymentUrl; }
+    public String getDeliveryUrl() { return deliveryUrl; }
+    public void setDeliveryUrl(String deliveryUrl) { this.deliveryUrl = deliveryUrl; }
+    public String getDeliveryError() { return deliveryError; }
+    public void setDeliveryError(String deliveryError) { this.deliveryError = deliveryError; }
+    public Date getDeliveredAt() { return deliveredAt; }
+    public void setDeliveredAt(Date deliveredAt) { this.deliveredAt = deliveredAt; }
     public Integer getVersion() { return version; }
     public void setVersion(Integer version) { this.version = version; }
     public String getCreatedBy() { return createdBy; }

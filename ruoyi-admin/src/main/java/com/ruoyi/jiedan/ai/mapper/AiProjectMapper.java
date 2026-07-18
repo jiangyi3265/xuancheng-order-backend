@@ -10,6 +10,7 @@ public interface AiProjectMapper
     List<Map<String, Object>> selectList(@Param("keyword") String keyword, @Param("enabled") Integer enabled);
     AiProject selectById(Long id);
     AiProject selectByIdForUpdate(Long id);
+    AiProject selectByOrderId(Long orderId);
     int insert(AiProject project);
     int update(AiProject project);
 }

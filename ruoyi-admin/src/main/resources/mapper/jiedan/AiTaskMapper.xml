@@ -11,11 +11,19 @@
         <result property="promptHash" column="prompt_hash"/>
         <result property="promptVersion" column="prompt_version"/>
         <result property="riskLevel" column="risk_level"/>
+        <result property="sourceType" column="source_type"/>
+        <result property="sourceId" column="source_id"/>
         <result property="status" column="status"/>
         <result property="currentAttemptId" column="current_attempt_id"/>
         <result property="approvedAttemptId" column="approved_attempt_id"/>
         <result property="approvedHeadSha" column="approved_head_sha"/>
         <result property="approvedDiffSha" column="approved_diff_sha"/>
+        <result property="deliveryStatus" column="delivery_status"/>
+        <result property="mergedSha" column="merged_sha"/>
+        <result property="deploymentUrl" column="deployment_url"/>
+        <result property="deliveryUrl" column="delivery_url"/>
+        <result property="deliveryError" column="delivery_error"/>
+        <result property="deliveredAt" column="delivered_at"/>
         <result property="version" column="version"/>
         <result property="createdBy" column="created_by"/>
         <result property="createTime" column="create_time"/>
@@ -24,12 +32,16 @@
     </resultMap>
 
     <sql id="cols">id, project_id, order_id, bug_id, title, prompt, prompt_hash, prompt_version,
-        risk_level, status, current_attempt_id, approved_attempt_id, approved_head_sha,
-        approved_diff_sha, version, created_by, create_time, updated_by, update_time</sql>
+        risk_level, source_type, source_id, status, current_attempt_id, approved_attempt_id,
+        approved_head_sha, approved_diff_sha, delivery_status, merged_sha, deployment_url,
+        delivery_url, delivery_error, delivered_at, version, created_by, create_time, updated_by, update_time</sql>
 
     <select id="selectList" resultType="java.util.LinkedHashMap">
         select t.id, t.project_id as projectId, p.name as projectName, t.order_id as orderId,
                t.bug_id as bugId, t.title, t.risk_level as riskLevel, t.status,
+               t.source_type as sourceType, t.delivery_status as deliveryStatus,
+               t.deployment_url as deploymentUrl, t.delivery_url as deliveryUrl,
+               t.delivery_error as deliveryError,
                t.current_attempt_id as currentAttemptId, t.version, t.created_by as createdBy,
                t.create_time as createTime, t.update_time as updateTime,
                a.worker_id as workerId, a.pr_url as prUrl, a.validation_passed as validationPassed,
@@ -51,9 +63,14 @@
         select t.id, t.project_id as projectId, p.name as projectName, p.repo_url as repoUrl,
                t.order_id as orderId, t.bug_id as bugId, t.title, t.prompt,
                t.prompt_hash as promptHash, t.prompt_version as promptVersion,
-               t.risk_level as riskLevel, t.status, t.current_attempt_id as currentAttemptId,
+               t.risk_level as riskLevel, t.source_type as sourceType, t.source_id as sourceId,
+               t.status, t.current_attempt_id as currentAttemptId,
                t.approved_attempt_id as approvedAttemptId, t.approved_head_sha as approvedHeadSha,
-               t.approved_diff_sha as approvedDiffSha, t.version, t.created_by as createdBy,
+               t.approved_diff_sha as approvedDiffSha, t.delivery_status as deliveryStatus,
+               t.merged_sha as mergedSha, t.deployment_url as deploymentUrl,
+               t.delivery_url as deliveryUrl, t.delivery_error as deliveryError,
+               t.delivered_at as deliveredAt, p.automation_mode as automationMode,
+               t.version, t.created_by as createdBy,
                t.create_time as createTime, t.updated_by as updatedBy, t.update_time as updateTime
         from ai_task t join ai_project p on p.id = t.project_id where t.id = #{id}
     </select>
@@ -62,19 +79,26 @@
         select <include refid="cols"/> from ai_task where id = #{id}
     </select>
 
+    <select id="selectBySource" resultMap="TaskResult">
+        select <include refid="cols"/> from ai_task
+        where source_type = #{sourceType} and source_id = #{sourceId}
+        limit 1
+    </select>
+
     <insert id="insert" parameterType="com.ruoyi.jiedan.ai.domain.AiTask" useGeneratedKeys="true" keyProperty="id">
         insert into ai_task
         (project_id, order_id, bug_id, title, prompt, prompt_hash, prompt_version, risk_level,
-         status, version, created_by, create_time, updated_by, update_time)
+         source_type, source_id, status, delivery_status, version, created_by, create_time, updated_by, update_time)
         values
         (#{projectId}, #{orderId}, #{bugId}, #{title}, #{prompt}, #{promptHash}, #{promptVersion},
-         #{riskLevel}, #{status}, 1, #{createdBy}, #{createTime}, #{updatedBy}, #{updateTime})
+         #{riskLevel}, #{sourceType}, #{sourceId}, #{status}, #{deliveryStatus}, 1,
+         #{createdBy}, #{createTime}, #{updatedBy}, #{updateTime})
     </insert>
 
     <update id="queue">
         update ai_task set status = 'queued', current_attempt_id = null, updated_by = #{updatedBy},
             update_time = now(), version = version + 1
-        where id = #{id} and status in ('draft','failed','rejected')
+        where id = #{id} and status in ('draft','failed','rejected','delivery_failed')
     </update>
 
     <update id="claim">
@@ -92,19 +116,40 @@
         where id = #{id} and current_attempt_id = #{attemptId} and status = 'claimed'
     </update>
 
+    <update id="markDeploying">
+        update ai_task set status = 'deploying', update_time = now()
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running','deploying')
+    </update>
+
     <update id="markAwaitingReview">
         update ai_task set status = 'awaiting_review', update_time = now(), version = version + 1
-        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running')
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running','deploying')
+    </update>
+
+    <update id="markDelivered">
+        update ai_task set status = 'delivered', delivery_status = 'delivered',
+            approved_attempt_id = #{attemptId}, approved_head_sha = #{headSha}, approved_diff_sha = #{diffSha},
+            merged_sha = #{mergedSha}, deployment_url = #{deploymentUrl}, delivery_url = #{deliveryUrl},
+            delivery_error = null, delivered_at = now(), updated_by = 'worker:auto-delivery',
+            update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running','deploying')
+    </update>
+
+    <update id="markDeliveryFailed">
+        update ai_task set status = 'delivery_failed', delivery_status = 'failed',
+            delivery_error = #{error}, updated_by = 'worker:auto-delivery',
+            update_time = now(), version = version + 1
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running','deploying')
     </update>
 
     <update id="markFailed">
         update ai_task set status = 'failed', update_time = now(), version = version + 1
-        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running')
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running','deploying')
     </update>
 
     <update id="requeueExpired">
         update ai_task set status = 'queued', current_attempt_id = null, update_time = now(), version = version + 1
-        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running')
+        where id = #{id} and current_attempt_id = #{attemptId} and status in ('claimed','running','deploying')
     </update>
 
     <update id="approve">
@@ -121,7 +166,7 @@
 
     <update id="cancel">
         update ai_task set status = 'cancelled', updated_by = #{updatedBy}, update_time = now(), version = version + 1
-        where id = #{id} and status in ('draft','queued','claimed','running','awaiting_review','failed','rejected')
+        where id = #{id} and status in ('draft','queued','claimed','running','deploying','awaiting_review','failed','rejected','delivery_failed')
     </update>
 
     <select id="selectCandidates" resultType="java.util.LinkedHashMap">

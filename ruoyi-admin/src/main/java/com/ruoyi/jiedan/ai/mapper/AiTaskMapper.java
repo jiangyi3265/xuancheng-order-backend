@@ -11,12 +11,20 @@ public interface AiTaskMapper
         @Param("status") String status, @Param("keyword") String keyword);
     Map<String, Object> selectDetail(Long id);
     AiTask selectById(Long id);
+    AiTask selectBySource(@Param("sourceType") String sourceType, @Param("sourceId") Long sourceId);
     int insert(AiTask task);
     int queue(@Param("id") Long id, @Param("updatedBy") String updatedBy);
     int claim(@Param("id") Long id, @Param("version") Integer version, @Param("updatedBy") String updatedBy);
     int bindAttempt(@Param("id") Long id, @Param("attemptId") Long attemptId);
     int markRunning(@Param("id") Long id, @Param("attemptId") Long attemptId);
+    int markDeploying(@Param("id") Long id, @Param("attemptId") Long attemptId);
     int markAwaitingReview(@Param("id") Long id, @Param("attemptId") Long attemptId);
+    int markDelivered(@Param("id") Long id, @Param("attemptId") Long attemptId,
+        @Param("headSha") String headSha, @Param("diffSha") String diffSha,
+        @Param("mergedSha") String mergedSha, @Param("deploymentUrl") String deploymentUrl,
+        @Param("deliveryUrl") String deliveryUrl);
+    int markDeliveryFailed(@Param("id") Long id, @Param("attemptId") Long attemptId,
+        @Param("error") String error);
     int markFailed(@Param("id") Long id, @Param("attemptId") Long attemptId);
     int requeueExpired(@Param("id") Long id, @Param("attemptId") Long attemptId);
     int approve(@Param("id") Long id, @Param("attemptId") Long attemptId,

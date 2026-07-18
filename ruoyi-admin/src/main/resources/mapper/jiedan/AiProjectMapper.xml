@@ -9,6 +9,11 @@
         <result property="provider" column="provider"/>
         <result property="model" column="model"/>
         <result property="profileKey" column="profile_key"/>
+        <result property="orderId" column="order_id"/>
+        <result property="automationMode" column="automation_mode"/>
+        <result property="deployWorkflow" column="deploy_workflow"/>
+        <result property="deployTimeoutMin" column="deploy_timeout_min"/>
+        <result property="productionUrl" column="production_url"/>
         <result property="validationCommands" column="validation_commands"/>
         <result property="forbiddenPaths" column="forbidden_paths"/>
         <result property="maxParallel" column="max_parallel"/>
@@ -21,17 +26,22 @@
     </resultMap>
 
     <sql id="cols">id, name, repo_url, default_branch, provider, model, profile_key,
+        order_id, automation_mode, deploy_workflow, deploy_timeout_min, production_url,
         validation_commands, forbidden_paths, max_parallel, enabled, version,
         created_by, create_time, updated_by, update_time</sql>
 
     <select id="selectList" resultType="java.util.LinkedHashMap">
         select p.id, p.name, p.repo_url as repoUrl, p.default_branch as defaultBranch,
                p.provider, p.model, p.profile_key as profileKey, p.max_parallel as maxParallel,
+               p.order_id as orderId, o.title as orderTitle, p.automation_mode as automationMode,
+               p.deploy_workflow as deployWorkflow, p.deploy_timeout_min as deployTimeoutMin,
+               p.production_url as productionUrl,
                p.enabled, p.version, p.update_time as updateTime,
-               sum(case when t.status in ('queued','claimed','running') then 1 else 0 end) as activeTaskCount,
+               sum(case when t.status in ('queued','claimed','running','deploying') then 1 else 0 end) as activeTaskCount,
                sum(case when t.status = 'awaiting_review' then 1 else 0 end) as reviewTaskCount
         from ai_project p
         left join ai_task t on t.project_id = p.id
+        left join jiedan_order o on o.id = p.order_id
         <where>
             <if test="keyword != null and keyword != ''">
                 (p.name like concat('%', #{keyword}, '%') or p.repo_url like concat('%', #{keyword}, '%'))
@@ -50,12 +60,19 @@
         select <include refid="cols"/> from ai_project where id = #{id} for update
     </select>
 
+    <select id="selectByOrderId" parameterType="Long" resultMap="ProjectResult">
+        select <include refid="cols"/> from ai_project
+        where order_id = #{orderId} and enabled = 1
+    </select>
+
     <insert id="insert" parameterType="com.ruoyi.jiedan.ai.domain.AiProject" useGeneratedKeys="true" keyProperty="id">
         insert into ai_project
-        (name, repo_url, default_branch, provider, model, profile_key, validation_commands,
+        (name, repo_url, default_branch, provider, model, profile_key, order_id, automation_mode,
+         deploy_workflow, deploy_timeout_min, production_url, validation_commands,
          forbidden_paths, max_parallel, enabled, version, created_by, create_time, updated_by, update_time)
         values
-        (#{name}, #{repoUrl}, #{defaultBranch}, #{provider}, #{model}, #{profileKey}, #{validationCommands},
+        (#{name}, #{repoUrl}, #{defaultBranch}, #{provider}, #{model}, #{profileKey}, #{orderId},
+         #{automationMode}, #{deployWorkflow}, #{deployTimeoutMin}, #{productionUrl}, #{validationCommands},
          #{forbiddenPaths}, #{maxParallel}, #{enabled}, 1, #{createdBy}, #{createTime}, #{updatedBy}, #{updateTime})
     </insert>
 
@@ -63,6 +80,8 @@
         update ai_project
         set name = #{name}, repo_url = #{repoUrl}, default_branch = #{defaultBranch},
             provider = #{provider}, model = #{model}, profile_key = #{profileKey},
+            order_id = #{orderId}, automation_mode = #{automationMode}, deploy_workflow = #{deployWorkflow},
+            deploy_timeout_min = #{deployTimeoutMin}, production_url = #{productionUrl},
             validation_commands = #{validationCommands}, forbidden_paths = #{forbiddenPaths},
             max_parallel = #{maxParallel}, enabled = #{enabled}, updated_by = #{updatedBy},
             update_time = #{updateTime}, version = version + 1

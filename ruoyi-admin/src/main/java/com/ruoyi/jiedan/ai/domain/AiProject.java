@@ -12,6 +12,11 @@ public class AiProject
     private String provider;
     private String model;
     private String profileKey;
+    private Long orderId;
+    private String automationMode;
+    private String deployWorkflow;
+    private Integer deployTimeoutMin;
+    private String productionUrl;
     private String validationCommands;
     private String forbiddenPaths;
     private Integer maxParallel;
@@ -36,6 +41,16 @@ public class AiProject
     public void setModel(String model) { this.model = model; }
     public String getProfileKey() { return profileKey; }
     public void setProfileKey(String profileKey) { this.profileKey = profileKey; }
+    public Long getOrderId() { return orderId; }
+    public void setOrderId(Long orderId) { this.orderId = orderId; }
+    public String getAutomationMode() { return automationMode; }
+    public void setAutomationMode(String automationMode) { this.automationMode = automationMode; }
+    public String getDeployWorkflow() { return deployWorkflow; }
+    public void setDeployWorkflow(String deployWorkflow) { this.deployWorkflow = deployWorkflow; }
+    public Integer getDeployTimeoutMin() { return deployTimeoutMin; }
+    public void setDeployTimeoutMin(Integer deployTimeoutMin) { this.deployTimeoutMin = deployTimeoutMin; }
+    public String getProductionUrl() { return productionUrl; }
+    public void setProductionUrl(String productionUrl) { this.productionUrl = productionUrl; }
     public String getValidationCommands() { return validationCommands; }
     public void setValidationCommands(String validationCommands) { this.validationCommands = validationCommands; }
     public String getForbiddenPaths() { return forbiddenPaths; }

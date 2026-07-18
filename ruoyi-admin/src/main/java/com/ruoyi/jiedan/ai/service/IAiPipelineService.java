@@ -13,6 +13,8 @@ public interface IAiPipelineService
     List<Map<String, Object>> listTasks(Long projectId, String status, String keyword);
     Map<String, Object> getTask(Long id);
     Map<String, Object> createTask(Map<String, Object> body, String actor);
+    Map<String, Object> intakeCustomerChange(Long orderId, Long bugId, String sourceType,
+        Long sourceId, String orderTitle, String content, Object attachments, String actor);
     Map<String, Object> dispatch(Long id, String actor);
     Map<String, Object> retry(Long id, String actor);
     Map<String, Object> approve(Long id, Map<String, Object> body, String actor);

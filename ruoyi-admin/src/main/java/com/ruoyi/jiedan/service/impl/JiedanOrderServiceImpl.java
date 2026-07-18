@@ -28,6 +28,7 @@ import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
 import com.ruoyi.jiedan.service.JiedanAttachmentStorage;
 import com.ruoyi.jiedan.service.JiedanPushService;
+import com.ruoyi.jiedan.ai.service.IAiPipelineService;
 
 @Service
 public class JiedanOrderServiceImpl implements IJiedanOrderService
@@ -52,6 +53,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanAttachmentStorage attachmentStorage;
+
+    @Autowired
+    private IAiPipelineService aiPipelineService;
 
     private static final List<Long> MEMBER_IDS = Arrays.asList(1L, 2L);
 
@@ -253,9 +257,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = asLong(p.get("byMemberId"));
         String byName = memberName(by, asStr(p.get("byUserName")));
         Date now = new Date();
-        insertBug(orderId, byName, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBug bug = insertBug(orderId, byName, asStr(p.get("content")), p.get("attachments"), now);
         touchUnread(orderId, by, now);
         pushOthers(by, "新 Bug", o.getTitle() + dash(byName));
+        aiPipelineService.intakeCustomerChange(orderId, bug.getId(), "customer_bug", bug.getId(),
+            o.getTitle(), asStr(p.get("content")), p.get("attachments"), byName);
         return getVO(orderId);
     }
 
@@ -285,9 +291,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = asLong(p.get("byMemberId"));
         String byName = memberName(by, asStr(p.get("byUserName")));
         Date now = new Date();
-        insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBugUpdate bugUpdate = insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
         touchUnread(o.getId(), by, now);
         pushOthers(by, "Bug 追加 QA", o.getTitle() + dash(byName));
+        aiPipelineService.intakeCustomerChange(o.getId(), bugId, "customer_bug_update", bugUpdate.getId(),
+            o.getTitle(), asStr(p.get("content")), p.get("attachments"), byName);
         return getVO(o.getId());
     }
 
@@ -322,7 +330,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBug bug = insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
 
         JiedanOrder upd = new JiedanOrder();
         upd.setId(orderId);
@@ -330,6 +338,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUpdateTime(now);
         orderMapper.update(upd);
         pushOthers(null, "客户提交 Bug", o.getTitle() + dash(name));
+        aiPipelineService.intakeCustomerChange(orderId, bug.getId(), "customer_bug", bug.getId(),
+            o.getTitle(), asStr(p.get("content")), p.get("attachments"), account);
         return getForCustomer(orderId, account);
     }
 
@@ -363,7 +373,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBugUpdate bugUpdate = insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
 
         JiedanOrder upd = new JiedanOrder();
         upd.setId(o.getId());
@@ -371,6 +381,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUpdateTime(now);
         orderMapper.update(upd);
         pushOthers(null, "客户追加 Bug QA", o.getTitle() + dash(name));
+        aiPipelineService.intakeCustomerChange(o.getId(), bugId, "customer_bug_update", bugUpdate.getId(),
+            o.getTitle(), asStr(p.get("content")), p.get("attachments"), account);
         return getForCustomer(o.getId(), account);
     }
 
@@ -617,7 +629,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         timelineMapper.insert(t);
     }
 
-    private void insertBug(Long orderId, String user, String content, Object attachments, Date time)
+    private JiedanBug insertBug(Long orderId, String user, String content, Object attachments, Date time)
     {
         JiedanBug bug = new JiedanBug();
         bug.setOrderId(orderId);
@@ -627,9 +639,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bug.setCreatedBy(user);
         bug.setCreateTime(time);
         bugMapper.insert(bug);
+        return bug;
     }
 
-    private void insertBugUpdate(Long bugId, String user, String content, Object attachments, Date time)
+    private JiedanBugUpdate insertBugUpdate(Long bugId, String user, String content, Object attachments, Date time)
     {
         JiedanBugUpdate update = new JiedanBugUpdate();
         update.setBugId(bugId);
@@ -638,6 +651,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         update.setCreatedBy(user);
         update.setCreateTime(time);
         bugUpdateMapper.insert(update);
+        return update;
     }
 
     private void touchUnread(Long orderId, Long by, Date now)

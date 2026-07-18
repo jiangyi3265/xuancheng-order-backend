@@ -24,6 +24,11 @@ import com.ruoyi.jiedan.ai.mapper.AiEventMapper;
 import com.ruoyi.jiedan.ai.mapper.AiProjectMapper;
 import com.ruoyi.jiedan.ai.mapper.AiTaskMapper;
 import com.ruoyi.jiedan.ai.service.IAiPipelineService;
+import com.ruoyi.jiedan.domain.JiedanOrder;
+import com.ruoyi.jiedan.domain.JiedanTimeline;
+import com.ruoyi.jiedan.mapper.JiedanBugMapper;
+import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
+import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 
 /**
  * AI 改码控制面状态机。
@@ -39,6 +44,9 @@ public class AiPipelineServiceImpl implements IAiPipelineService
     @Autowired private AiTaskMapper taskMapper;
     @Autowired private AiAttemptMapper attemptMapper;
     @Autowired private AiEventMapper eventMapper;
+    @Autowired private JiedanOrderMapper orderMapper;
+    @Autowired private JiedanBugMapper bugMapper;
+    @Autowired private JiedanTimelineMapper timelineMapper;
 
     @Override
     public List<Map<String, Object>> listProjects(String keyword, Integer enabled)
@@ -58,6 +66,11 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         out.put("provider", p.getProvider());
         out.put("model", p.getModel());
         out.put("profileKey", p.getProfileKey());
+        out.put("orderId", p.getOrderId());
+        out.put("automationMode", p.getAutomationMode());
+        out.put("deployWorkflow", p.getDeployWorkflow());
+        out.put("deployTimeoutMin", p.getDeployTimeoutMin());
+        out.put("productionUrl", p.getProductionUrl());
         out.put("validationCommands", parseJsonOrString(p.getValidationCommands()));
         out.put("forbiddenPaths", parseJsonOrString(p.getForbiddenPaths()));
         out.put("maxParallel", p.getMaxParallel());
@@ -127,6 +140,8 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         task.setPromptVersion(1);
         task.setPromptHash(sha256("1\n" + normalizePrompt(prompt)));
         task.setRiskLevel(riskLevel);
+        task.setSourceType("manual");
+        task.setDeliveryStatus("pending");
         task.setStatus("draft");
         task.setCreatedBy(actor);
         task.setUpdatedBy(actor);
@@ -135,6 +150,55 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         if (taskMapper.insert(task) != 1) throw new ServiceException("创建 AI 任务失败");
         event(task.getId(), null, "task.created", "user", actor, mapOf("promptHash", task.getPromptHash()));
         if (Boolean.TRUE.equals(bool(body.get("dispatch")))) queue(task.getId(), actor, "task.dispatched");
+        return getTask(task.getId());
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> intakeCustomerChange(Long orderId, Long bugId, String sourceType,
+        Long sourceId, String orderTitle, String content, Object attachments, String actor)
+    {
+        if (orderId == null || sourceId == null) return null;
+        AiProject project = projectMapper.selectByOrderId(orderId);
+        if (project == null || "manual".equals(project.getAutomationMode())) return null;
+        String source = enumValue(sourceType, "customer_bug", "customer_bug", "customer_bug_update");
+        AiTask duplicate = taskMapper.selectBySource(source, sourceId);
+        if (duplicate != null) return getTask(duplicate.getId());
+
+        String request = boundedText(content, "客户上传了附件，请结合材料定位并完成修改。", 20_000);
+        String attachmentText = attachments == null ? "无" : JSON.toJSONString(attachments);
+        String safeOrderTitle = boundedText(orderTitle, "未命名项目", 120);
+        String prompt = "客户在项目「" + safeOrderTitle + "」中提交了"
+            + ("customer_bug_update".equals(source) ? "追加说明" : "问题") + "。\n\n"
+            + "客户原文：\n" + request + "\n\n附件元数据：\n" + attachmentText + "\n\n"
+            + "请先复现或定位根因，完成最小且完整的修复，补充相应测试，并确保项目配置的所有验证命令通过。"
+            + "不要修改部署、密钥、CI 或数据库生产脚本。";
+
+        Date now = new Date();
+        AiTask task = new AiTask();
+        task.setProjectId(project.getId());
+        task.setOrderId(orderId);
+        task.setBugId(bugId);
+        task.setTitle(boundedText(("customer_bug_update".equals(source) ? "客户追加：" : "客户问题：")
+            + safeOrderTitle, "客户问题", 120));
+        task.setPrompt(prompt);
+        task.setPromptVersion(1);
+        task.setPromptHash(sha256("1\n" + normalizePrompt(prompt)));
+        String riskLevel = detectRiskLevel(request);
+        task.setRiskLevel(riskLevel);
+        task.setSourceType(source);
+        task.setSourceId(sourceId);
+        task.setStatus("queued");
+        task.setDeliveryStatus("pending");
+        task.setCreatedBy("customer:" + text(actor, "unknown", 50));
+        task.setUpdatedBy("automation:intake");
+        task.setCreateTime(now);
+        task.setUpdateTime(now);
+        if (taskMapper.insert(task) != 1) throw new ServiceException("客户需求自动入队失败");
+        event(task.getId(), null, "task.auto_created", "system", "customer-intake",
+            mapOf("sourceType", source, "sourceId", sourceId, "orderId", orderId, "riskLevel", riskLevel));
+        notifyCustomer(orderId, "已自动进入开发队列，任务 #" + task.getId()
+            + " 正在等待 AI 执行环境处理。完成部署后会在这里通知你。", "doing");
         return getTask(task.getId());
     }
 
@@ -266,7 +330,9 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         Date lease = new Date(System.currentTimeMillis() + LEASE_MILLIS);
         if (attemptMapper.heartbeat(attemptId, fenceToken, workerId, lease) != 1)
             throw new ServiceException("租约已失效，Worker 必须立即停止当前任务");
-        taskMapper.markRunning(attempt.getTaskId(), attemptId);
+        String phase = enumValue(body.get("phase"), "running", "running", "deploying");
+        if ("deploying".equals(phase)) taskMapper.markDeploying(attempt.getTaskId(), attemptId);
+        else taskMapper.markRunning(attempt.getTaskId(), attemptId);
         return mapOf("attemptId", attemptId, "leaseExpireTime", lease, "leaseSeconds", 120);
     }
 
@@ -312,10 +378,41 @@ public class AiPipelineServiceImpl implements IAiPipelineService
             update.setDiffSha(shaValue(body.get("diffSha"), "diffSha"));
             update.setPrUrl(requiredGithubPr(body.get("prUrl")));
             update.setPrNumber(longValue(body.get("prNumber")));
-            if (attemptMapper.completeSuccess(update) != 1 || taskMapper.markAwaitingReview(current.getTaskId(), attemptId) != 1)
+            if (attemptMapper.completeSuccess(update) != 1)
                 throw new ServiceException("租约或任务状态已变化，拒绝写入结果");
-            event(current.getTaskId(), attemptId, "attempt.succeeded", "worker", current.getWorkerId(),
-                mapOf("headSha", update.getHeadSha(), "diffSha", update.getDiffSha(), "prUrl", update.getPrUrl()));
+            AiTask task = requiredTask(current.getTaskId());
+            AiProject project = requiredProject(task.getProjectId());
+            String automationMode = effectiveAutomationMode(task, project);
+            String deliveryOutcome = text(body.get("deliveryOutcome"), "pending", 30);
+            if ("auto_deploy".equals(automationMode) && "delivered".equals(deliveryOutcome))
+            {
+                String mergedSha = shaValue(body.get("mergedSha"), "mergedSha");
+                String deploymentUrl = optionalUrl(body.get("deploymentUrl"), "部署记录");
+                String deliveryUrl = optionalUrl(body.get("deliveryUrl"), "客户验收地址");
+                if (StringUtils.isEmpty(deliveryUrl)) deliveryUrl = project.getProductionUrl();
+                if (taskMapper.markDelivered(task.getId(), attemptId, update.getHeadSha(), update.getDiffSha(),
+                    mergedSha, deploymentUrl, deliveryUrl) != 1)
+                    throw new ServiceException("任务状态已变化，拒绝写入交付结果");
+                event(task.getId(), attemptId, "delivery.succeeded", "worker", current.getWorkerId(),
+                    mapOf("mergedSha", mergedSha, "deploymentUrl", deploymentUrl, "deliveryUrl", deliveryUrl));
+                completeCustomerDelivery(task, deliveryUrl);
+            }
+            else if ("auto_deploy".equals(automationMode) && "failed".equals(deliveryOutcome))
+            {
+                String error = text(body.get("deliveryError"), "自动合并或部署失败", 4000);
+                if (taskMapper.markDeliveryFailed(task.getId(), attemptId, error) != 1)
+                    throw new ServiceException("任务状态已变化，拒绝写入交付失败结果");
+                event(task.getId(), attemptId, "delivery.failed", "worker", current.getWorkerId(),
+                    mapOf("error", error, "prUrl", update.getPrUrl()));
+                notifyCustomer(task.getOrderId(), "自动开发已产出代码，但部署没有完成，当前已转入异常处理队列。", "doing");
+            }
+            else
+            {
+                if (taskMapper.markAwaitingReview(task.getId(), attemptId) != 1)
+                    throw new ServiceException("租约或任务状态已变化，拒绝写入结果");
+                event(task.getId(), attemptId, "attempt.succeeded", "worker", current.getWorkerId(),
+                    mapOf("headSha", update.getHeadSha(), "diffSha", update.getDiffSha(), "prUrl", update.getPrUrl()));
+            }
         }
         else
         {
@@ -325,6 +422,18 @@ public class AiPipelineServiceImpl implements IAiPipelineService
                 throw new ServiceException("租约或任务状态已变化，拒绝写入结果");
             event(current.getTaskId(), attemptId, "attempt.failed", "worker", current.getWorkerId(),
                 mapOf("errorCode", update.getErrorCode(), "errorMessage", update.getErrorMessage()));
+            AiTask task = requiredTask(current.getTaskId());
+            AiProject project = requiredProject(task.getProjectId());
+            if (!"manual".equals(project.getAutomationMode()) && current.getAttemptNo() != null
+                && current.getAttemptNo() < 2 && taskMapper.queue(task.getId(), "system:auto-retry") == 1)
+            {
+                event(task.getId(), attemptId, "task.auto_retried", "system", "auto-retry",
+                    mapOf("attemptNo", current.getAttemptNo()));
+            }
+            else if (!"manual".equals(project.getAutomationMode()))
+            {
+                notifyCustomer(task.getOrderId(), "自动开发暂未完成，当前已转入异常处理队列。", "doing");
+            }
         }
         return getTask(current.getTaskId());
     }
@@ -380,6 +489,11 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         out.put("provider", project.getProvider());
         out.put("model", project.getModel());
         out.put("profileKey", project.getProfileKey());
+        out.put("automationMode", effectiveAutomationMode(task, project));
+        out.put("configuredAutomationMode", project.getAutomationMode());
+        out.put("deployWorkflow", project.getDeployWorkflow());
+        out.put("deployTimeoutMin", project.getDeployTimeoutMin());
+        out.put("productionUrl", project.getProductionUrl());
         out.put("validationCommands", parseJsonOrString(project.getValidationCommands()));
         out.put("forbiddenPaths", parseJsonOrString(project.getForbiddenPaths()));
         return out;
@@ -394,6 +508,23 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         p.setProvider(enumValue(value(body, old, "provider", old == null ? "codex" : old.getProvider()), "codex", "codex", "claude", "hermes", "custom"));
         p.setModel(text(value(body, old, "model", old == null ? "" : old.getModel()), "", 100));
         p.setProfileKey(text(value(body, old, "profileKey", old == null ? "default" : old.getProfileKey()), "default", 100));
+        p.setOrderId(longValue(value(body, old, "orderId", old == null ? null : old.getOrderId())));
+        p.setAutomationMode(enumValue(value(body, old, "automationMode", old == null ? "manual" : old.getAutomationMode()),
+            "manual", "manual", "auto_pr", "auto_deploy"));
+        p.setDeployWorkflow(text(value(body, old, "deployWorkflow", old == null ? "deploy.yml" : old.getDeployWorkflow()), "deploy.yml", 120));
+        if (!p.getDeployWorkflow().matches("^[A-Za-z0-9][A-Za-z0-9._/-]*\\.ya?ml$")
+            || p.getDeployWorkflow().contains("..") || p.getDeployWorkflow().startsWith("/"))
+            throw new ServiceException("部署工作流必须是仓库内的 yml/yaml 文件名");
+        int deployTimeout = integer(value(body, old, "deployTimeoutMin", old == null ? 20 : old.getDeployTimeoutMin()), 20);
+        if (deployTimeout < 5 || deployTimeout > 120) throw new ServiceException("部署等待时间必须在 5 到 120 分钟之间");
+        p.setDeployTimeoutMin(deployTimeout);
+        p.setProductionUrl(optionalUrl(value(body, old, "productionUrl", old == null ? "" : old.getProductionUrl()), "线上地址"));
+        if (!"manual".equals(p.getAutomationMode()) && p.getOrderId() == null)
+            throw new ServiceException("自动模式必须绑定一个客户项目");
+        if ("auto_deploy".equals(p.getAutomationMode()) && StringUtils.isEmpty(p.getProductionUrl()))
+            throw new ServiceException("全自动交付必须配置客户验收地址");
+        if (p.getOrderId() != null && orderMapper.selectById(p.getOrderId()) == null)
+            throw new ServiceException("绑定的客户项目不存在");
         p.setValidationCommands(jsonArrayValue(value(body, old, "validationCommands", old == null ? "[]" : old.getValidationCommands()), "[]", false));
         p.setForbiddenPaths(jsonArrayValue(value(body, old, "forbiddenPaths", old == null ? DEFAULT_FORBIDDEN : old.getForbiddenPaths()), DEFAULT_FORBIDDEN, true));
         int maxParallel = integer(value(body, old, "maxParallel", old == null ? 1 : old.getMaxParallel()), 1);
@@ -423,7 +554,7 @@ public class AiPipelineServiceImpl implements IAiPipelineService
     private boolean isActive(AiTask task, AiAttempt attempt)
     {
         return task.getCurrentAttemptId() != null && task.getCurrentAttemptId().equals(attempt.getId())
-            && ("claimed".equals(task.getStatus()) || "running".equals(task.getStatus()))
+            && ("claimed".equals(task.getStatus()) || "running".equals(task.getStatus()) || "deploying".equals(task.getStatus()))
             && ("claimed".equals(attempt.getStatus()) || "running".equals(attempt.getStatus()))
             && attempt.getLeaseExpireTime() != null && !attempt.getLeaseExpireTime().before(new Date());
     }
@@ -464,6 +595,63 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         if (!url.matches("^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+(?:[/?#].*)?$"))
             throw new ServiceException("PR 地址必须是 GitHub pull request 链接");
         return url;
+    }
+
+    private String optionalUrl(Object value, String label)
+    {
+        String url = value == null ? "" : value.toString().trim();
+        if (url.length() == 0) return "";
+        if (url.length() > 1000 || !url.matches("^https?://[^\\s]+$"))
+            throw new ServiceException(label + "必须是 http/https 地址");
+        return url;
+    }
+
+    private String effectiveAutomationMode(AiTask task, AiProject project)
+    {
+        if ("auto_deploy".equals(project.getAutomationMode()) && !"low".equals(task.getRiskLevel()))
+            return "auto_pr";
+        return project.getAutomationMode();
+    }
+
+    private String detectRiskLevel(String request)
+    {
+        String normalized = request == null ? "" : request.toLowerCase();
+        String[] highRiskTerms = {
+            "支付", "退款", "金额", "账单", "发票", "登录", "鉴权", "权限", "管理员", "密码",
+            "密钥", "token", "secret", "oauth", "删除数据", "清空数据", "数据库迁移", "生产数据库",
+            "部署脚本", "github action", "workflow", "服务器", "ssh", "隐私", "身份证", "银行卡"
+        };
+        for (String term : highRiskTerms)
+        {
+            if (normalized.contains(term)) return "high";
+        }
+        return "low";
+    }
+
+    private void completeCustomerDelivery(AiTask task, String deliveryUrl)
+    {
+        if (task.getBugId() != null) bugMapper.updateStatus(task.getBugId(), "resolved");
+        String suffix = StringUtils.isEmpty(deliveryUrl) ? "" : "\n验收地址：" + deliveryUrl;
+        notifyCustomer(task.getOrderId(), "本次修改已自动完成并部署，请刷新页面验收。" + suffix, "review");
+    }
+
+    private void notifyCustomer(Long orderId, String content, String orderStatus)
+    {
+        if (orderId == null || orderMapper.selectById(orderId) == null) return;
+        Date now = new Date();
+        JiedanTimeline timeline = new JiedanTimeline();
+        timeline.setOrderId(orderId);
+        timeline.setUserName("AI 开发助手");
+        timeline.setType("reply");
+        timeline.setContent(content);
+        timeline.setCreateTime(now);
+        timelineMapper.insert(timeline);
+
+        JiedanOrder update = new JiedanOrder();
+        update.setId(orderId);
+        update.setStatus(orderStatus);
+        update.setUpdateTime(now);
+        orderMapper.update(update);
     }
 
     private String validateRepo(String repo)
@@ -512,6 +700,13 @@ public class AiPipelineServiceImpl implements IAiPipelineService
         String text = value.toString().trim();
         if (text.length() > max) throw new ServiceException("文本不能超过 " + max + " 个字符");
         return text.length() == 0 ? fallback : text;
+    }
+
+    private static String boundedText(Object value, String fallback, int max)
+    {
+        String text = value == null ? "" : value.toString().trim();
+        if (text.length() == 0) text = fallback;
+        return text.length() <= max ? text : text.substring(0, Math.max(1, max - 1)) + "…";
     }
 
     private static String trim(String value)
