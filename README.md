@@ -35,3 +35,12 @@ java -jar ruoyi-admin/target/ruoyi-admin.jar
 ## 简历描述示例
 
 基于 RuoYi 二次开发接单系统后端，设计订单流转、时间线、未读提醒和定时催办能力，支撑管理后台与客户提交端的完整业务闭环。
+
+## 当前部署（2026-10-29）
+
+- 管理后台：https://jiedanxt.oksja.cn/
+- 客户端：https://jiedanxt.oksja.cn/client/
+- 后端由同域名 `/jiedan/**`、`/login`、`/captchaImage` 代理，服务监听 `127.0.0.1:18091`。
+- AI 改码流水线已移除；订单、客户账号、双向沟通、Bug 跟进和附件功能保留。
+- GitHub Actions 负责构建并保存产物，已移除指向旧域名的自动部署。发布操作见后端 `deploy/production.md`。
+- 正式管理员密码单独交付；客户账号由管理员在「客户账号」中创建。线上没有预置演示客户和演示订单。
