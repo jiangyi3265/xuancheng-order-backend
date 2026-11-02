@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanAccountMapper">
+
+    <select id="selectBossUserIds" resultType="Long">
+        select distinct u.user_id
+        from sys_user u
+        join sys_user_role ur on ur.user_id = u.user_id
+        join sys_role r on r.role_id = ur.role_id
+        where r.role_key = 'admin' and r.del_flag = '0'
+          and u.del_flag = '0' and u.status = '0'
+        order by u.user_id
+    </select>
+
+    <select id="selectOwnerOf" parameterType="Long" resultType="Long">
+        select owner_user_id from jiedan_account_owner where user_id = #{userId}
+    </select>
+
+    <insert id="upsertOwner">
+        insert into jiedan_account_owner (user_id, owner_user_id, create_time)
+        values (#{userId}, #{ownerUserId}, now())
+        on duplicate key update owner_user_id = values(owner_user_id)
+    </insert>
+
+    <delete id="deleteOwner" parameterType="Long">
+        delete from jiedan_account_owner where user_id = #{userId}
+    </delete>
+
+    <select id="selectRoleIdByKey" parameterType="String" resultType="Long">
+        select role_id from sys_role where role_key = #{roleKey} and del_flag = '0' limit 1
+    </select>
+
+    <select id="selectUserIdByName" parameterType="String" resultType="Long">
+        select user_id from sys_user where user_name = #{userName} and del_flag = '0' limit 1
+    </select>
+
+    <select id="selectRoleKeys" parameterType="Long" resultType="String">
+        select r.role_key
+        from sys_user_role ur
+        join sys_role r on r.role_id = ur.role_id
+        where ur.user_id = #{userId} and r.del_flag = '0'
+    </select>
+
+    <select id="selectStaff" resultType="java.util.LinkedHashMap">
+        select
+            u.user_id     as userId,
+            u.user_name   as userName,
+            u.nick_name   as nickName,
+            u.status      as status,
+            u.create_time as createTime,
+            exists (select 1 from sys_user_role ur2
+                    join sys_role r2 on r2.role_id = ur2.role_id
+                    where ur2.user_id = u.user_id and r2.role_key = 'admin' and r2.del_flag = '0') as isBoss,
+            (select count(*) from jiedan_order o where o.owner_id = u.user_id) as orderCount,
+            (select count(*) from jiedan_order o
+                where o.owner_id = u.user_id and o.status not in ('done', 'cancelled')) as unfinishedCount
+        from sys_user u
+        where u.del_flag = '0'
+          and exists (select 1 from sys_user_role ur
+                      join sys_role r on r.role_id = ur.role_id
+                      where ur.user_id = u.user_id and r.role_key in ('admin', 'employee') and r.del_flag = '0')
+        <if test="userId != null">
+          and u.user_id = #{userId}
+        </if>
+        order by u.user_id
+    </select>
+
+    <select id="countOwnedCustomers" parameterType="Long" resultType="int">
+        select count(*)
+        from jiedan_account_owner a
+        join sys_user cu on cu.user_id = a.user_id and cu.del_flag = '0'
+        join sys_user_role ur on ur.user_id = a.user_id
+        join sys_role r on r.role_id = ur.role_id and r.role_key = 'customer'
+        where a.owner_user_id = #{userId}
+    </select>
+
+    <select id="countOrdersByOwner" parameterType="Long" resultType="int">
+        select count(*) from jiedan_order where owner_id = #{userId}
+    </select>
+
+</mapper>

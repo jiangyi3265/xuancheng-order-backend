@@ -80,6 +80,9 @@
             group by order_id
         ) mc on mc.order_id = o.id
         left join jiedan_timeline lt on lt.id = mc.last_id
+        <where>
+            <if test="ownerId != null">o.owner_id = #{ownerId}</if>
+        </where>
         order by o.id desc
     </select>
 
@@ -129,6 +132,12 @@
 
     <select id="selectVersionById" parameterType="Long" resultType="Long">
         select version from jiedan_order where id = #{id}
+    </select>
+
+    <select id="selectVersionScoped" resultType="Long">
+        select version from jiedan_order
+        where id = #{id}
+        <if test="ownerId != null">and owner_id = #{ownerId}</if>
     </select>
 
     <select id="selectVersionForCustomer" resultType="Long">

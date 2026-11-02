@@ -26,6 +26,20 @@ Java 17 路径为 `/www/server/java/jdk-17.0.8/bin/java`。启动参数包含 `-
 4. 将 `current` 原子切换到新版本，重启 `xuancheng-order-backend`。`nginx -t` 通过后重载 Nginx。
 5. 检查 `/captchaImage`、后台登录、客户提交与订单查询。失败则切回旧版本并重启后端。
 
+## 权限升级（总管理员 / 下属管理员）
+
+升级前线上只有一个共用的 `admin` 账号，“总裁/副总裁”只是页面上的切换按钮，订单负责人 `owner_id` 存的是写死的 1、2。升级后每个人用自己的账号登录：总管理员（`admin` 角色）看全部项目，下属管理员（`employee` 角色）只看负责人是自己的项目，客户提交的需求自动落到其归属管理员名下。
+
+一次性升级步骤（线上已有数据，**不要**重新导入 `fresh-install.sql`）：
+
+1. `mysqldump --defaults-extra-file=/opt/xuancheng-order/config/mysql-root.cnf --single-transaction xc_jiedan` 备份。
+2. 执行 `deploy/upgrade_permission_v1.sql`（建 `jiedan_account_owner` 表、加 `employee` 角色、给现有客户回填归属=总管理员；可重复执行）。
+3. 按“发布更新”流程部署新版本的后端 JAR、管理后台、客户端。
+4. 用总管理员登录后台，在「成员管理」创建下属账号（例如原来的副总裁）。
+5. 把 `deploy/upgrade_permission_v1_owner_remap.sql` 最后一行 `CALL` 里的账号名改成这个下属的登录账号，执行**一次**：旧订单 owner_id 1→总管理员、2→该下属，清空旧的未读标记，推送 SendKey 迁到新账号。脚本带防重复标记，重复执行会报错中止。
+
+第 3 步到第 5 步之间，总管理员能看到全部订单，但旧订单的“负责人”显示可能不对；下属账号还没创建，所以不会出现越权。新装的库用 `fresh-install.sql` 即可，已包含新表和角色。
+
 ## HTTPS 与 Nginx
 
 站点配置：`/www/server/panel/vhost/nginx/jiedanxt.oksja.cn.conf`。

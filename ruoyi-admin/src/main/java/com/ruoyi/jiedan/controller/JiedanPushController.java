@@ -44,7 +44,9 @@ public class JiedanPushController
         return AjaxResult.success(service.testPush(memberId));
     }
 
+    /** 手动触发全员截止提醒：仅总管理员 */
     @PostMapping("/reminder")
+    @PreAuthorize("@ss.hasRole('admin')")
     public AjaxResult reminder()
     {
         return AjaxResult.success("已推送 " + service.runDeadlineReminder() + " 条提醒");

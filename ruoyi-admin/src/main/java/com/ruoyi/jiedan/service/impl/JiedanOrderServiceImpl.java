@@ -7,14 +7,19 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.alibaba.fastjson2.JSON;
+import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.jiedan.domain.JiedanBug;
 import com.ruoyi.jiedan.domain.JiedanBugUpdate;
 import com.ruoyi.jiedan.domain.JiedanOrder;
@@ -26,9 +31,16 @@ import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
 import com.ruoyi.jiedan.mapper.JiedanSettingMapper;
 import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
+import com.ruoyi.jiedan.service.JiedanAccess;
 import com.ruoyi.jiedan.service.JiedanAttachmentStorage;
 import com.ruoyi.jiedan.service.JiedanPushService;
 
+/**
+ * 接单订单服务。
+ * 管理端方法一律先过 guard()：总管理员看全部，下属管理员只能动负责人是自己的项目；
+ * “操作人是谁”取自登录令牌，不再信任前端传来的 byMemberId / byUserName。
+ * 项目的相关人 = 负责人 + 全体总管理员，未读标记与推送都只发给这些人。
+ */
 @Service
 public class JiedanOrderServiceImpl implements IJiedanOrderService
 {
@@ -53,13 +65,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Autowired
     private JiedanAttachmentStorage attachmentStorage;
 
-    private static final List<Long> MEMBER_IDS = Arrays.asList(1L, 2L);
-
-    private static final Map<Long, String> MEMBER_NAMES = new LinkedHashMap<Long, String>()
-    {{
-        put(1L, "尚琦凯");
-        put(2L, "费鹏飞");
-    }};
+    @Autowired
+    private JiedanAccess access;
 
     private static final Map<String, String> LEGACY_MEMBER_NAMES = new LinkedHashMap<String, String>()
     {{
@@ -76,12 +83,12 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         put("cancelled", "已取消");
     }};
 
-    // ---------- 查询 ----------
+    // ---------- 查询（管理端，按身份过滤） ----------
     @Override
     public List<Map<String, Object>> listVO()
     {
         List<Map<String, Object>> list = new ArrayList<>();
-        for (Map<String, Object> row : orderMapper.selectAdminSummaries())
+        for (Map<String, Object> row : orderMapper.selectAdminSummaries(access.ownerScope()))
         {
             list.add(toAdminListSummaryVO(row));
         }
@@ -91,8 +98,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Override
     public Map<String, Object> getVO(Long id)
     {
-        JiedanOrder o = orderMapper.selectById(id);
-        return o == null ? null : toVO(o, true);
+        return toVO(guard(id), true);
+    }
+
+    @Override
+    public Map<String, Object> getVersion(Long id)
+    {
+        return versionVO(id, orderMapper.selectVersionScoped(id, access.ownerScope()));
     }
 
     // ---------- 客户门户：仅限本人项目 ----------
@@ -109,12 +121,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     @Override
-    public Map<String, Object> getVersion(Long id)
-    {
-        return versionVO(id, orderMapper.selectVersionById(id));
-    }
-
-    @Override
     public Map<String, Object> getForCustomer(Long id, String account)
     {
         JiedanOrder o = orderMapper.selectById(id);
@@ -128,7 +134,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return versionVO(id, orderMapper.selectVersionForCustomer(id, account));
     }
 
-    // ---------- 客户留言：老板与员工同时收到并标记未读 ----------
+    // ---------- 客户留言：负责人与总管理员同时收到并标记未读 ----------
     @Override
     public Map<String, Object> customerMessage(Long orderId, String account, String customerName,
                                                String content, Object attachments)
@@ -138,18 +144,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
         addTimeline(orderId, name, "message", content, jsonStr(attachments), now);
-        // 客户消息：老板和员工都置为未读
-        JiedanOrder upd = new JiedanOrder();
-        upd.setId(orderId);
-        upd.setUnread(join(MEMBER_IDS));
-        upd.setUpdateTime(now);
-        orderMapper.update(upd);
-        // 推送给全部成员
+        markUnreadForCustomerAction(o, now);
         String brief = strOr(content, "[消息]");
-        for (Long m : MEMBER_IDS)
-        {
-            pushService.pushToMember(m, "💬 客户留言", o.getTitle() + "：" + brief + "（" + name + "）");
-        }
+        pushRecipients(o, null, "💬 客户留言", o.getTitle() + "：" + brief + "（" + name + "）");
         return getForCustomer(orderId, account);
     }
 
@@ -158,24 +155,54 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> create(Map<String, Object> p)
     {
-        Date now = new Date();
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        Long by = access.currentUserId();
+        Long owner = by;
+        if (access.isBoss())
+        {
+            Long requested = asLong(p.get("ownerId"));
+            if (requested != null)
+            {
+                if (!access.isAssignable(requested)) throw new ServiceException("负责人无效或账号已停用");
+                owner = requested;
+            }
+        }
+        String customerAccount = asStr(p.get("customerAccount"));
+        access.requireBindableCustomer(customerAccount);
+        return insertOrder(p, owner, customerAccount, by, access.currentName());
+    }
 
+    /** 客户端提交需求：自动落到该客户归属管理员的名下。 */
+    @Override
+    @Transactional
+    public Map<String, Object> createFromCustomer(Map<String, Object> p, String account)
+    {
+        Long owner = access.ownerOfAccount(SecurityUtils.getUserId());
+        Map<String, Object> q = new LinkedHashMap<>(p);
+        q.put("channel", "form");
+        q.put("status", "pending");
+        if (strOr(asStr(q.get("customer")), null) == null) q.put("customer", account);
+        String byName = strOr(asStr(q.get("byUserName")), "客户：" + account);
+        return insertOrder(q, owner, account, null, byName);
+    }
+
+    private Map<String, Object> insertOrder(Map<String, Object> p, Long ownerId, String customerAccount,
+                                            Long by, String byName)
+    {
+        Date now = new Date();
         JiedanOrder o = new JiedanOrder();
         o.setTitle(strOr(asStr(p.get("title")), "未命名需求"));
         o.setChannel(strOr(asStr(p.get("channel")), "wechat"));
         o.setCustomer(asStr(p.get("customer")));
-        o.setCustomerAccount(asStr(p.get("customerAccount")));
+        o.setCustomerAccount(customerAccount);
         o.setContact(asStr(p.get("contact")));
         o.setAmount(asDecimal(p.get("amount")));
-        o.setOwnerId(asLong(p.get("ownerId")));
+        o.setOwnerId(ownerId);
         o.setStatus(strOr(asStr(p.get("status")), "pending"));
         o.setPriority(strOr(asStr(p.get("priority")), "medium"));
         o.setDeadline(asStr(p.get("deadline")));
         o.setRequirement(asStr(p.get("requirement")));
         o.setAttachments(jsonStr(p.get("attachments")));
-        o.setUnread(csvOthers(by));
+        o.setUnread(join(othersThan(ownerId, by)));
         o.setPaid(0);
         o.setRevisions(0);
         o.setCreateTime(now);
@@ -189,8 +216,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         orderMapper.update(upd);
 
         addTimeline(o.getId(), byName, "create", "创建订单", null, now);
-        pushOthers(by, "🆕 新单待接", o.getTitle() + dash(o.getCustomer()) + "（来自 " + byName + "）");
-        return getVO(o.getId());
+        pushRecipients(o, by, "🆕 新单待接", o.getTitle() + dash(o.getCustomer()) + "（来自 " + byName + "）");
+        return voOf(o.getId());
     }
 
     // ---------- 修改 ----------
@@ -198,32 +225,76 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     public Map<String, Object> update(Map<String, Object> p)
     {
         Long id = asLong(p.get("id"));
-        Long by = asLong(p.get("byMemberId"));
+        JiedanOrder cur = guard(id);
+        Long by = access.currentUserId();
+        boolean boss = access.isBoss();
+
         JiedanOrder o = new JiedanOrder();
         o.setId(id);
         if (p.containsKey("title")) o.setTitle(asStr(p.get("title")));
         if (p.containsKey("channel")) o.setChannel(asStr(p.get("channel")));
         if (p.containsKey("customer")) o.setCustomer(asStr(p.get("customer")));
-        if (p.containsKey("customerAccount")) o.setCustomerAccount(asStr(p.get("customerAccount")));
+        if (p.containsKey("customerAccount"))
+        {
+            String account = asStr(p.get("customerAccount"));
+            if (!Objects.equals(strOr(account, ""), strOr(cur.getCustomerAccount(), "")))
+            {
+                access.requireBindableCustomer(account);
+            }
+            o.setCustomerAccount(account);
+        }
         if (p.containsKey("contact")) o.setContact(asStr(p.get("contact")));
         if (p.containsKey("amount")) o.setAmount(asDecimal(p.get("amount")));
-        if (p.containsKey("ownerId")) o.setOwnerId(asLong(p.get("ownerId")));
+
+        Long newOwner = cur.getOwnerId();
+        if (p.containsKey("ownerId"))
+        {
+            Long requested = asLong(p.get("ownerId"));
+            if (requested != null && !requested.equals(cur.getOwnerId()))
+            {
+                if (!boss) throw new ServiceException("下属管理员不能转派项目");
+                if (!access.isAssignable(requested)) throw new ServiceException("负责人无效或账号已停用");
+                o.setOwnerId(requested);
+                newOwner = requested;
+            }
+        }
         if (p.containsKey("status")) o.setStatus(asStr(p.get("status")));
         if (p.containsKey("priority")) o.setPriority(asStr(p.get("priority")));
         if (p.containsKey("deadline")) o.setDeadline(asStr(p.get("deadline")));
         if (p.containsKey("requirement")) o.setRequirement(asStr(p.get("requirement")));
         if (p.containsKey("attachments")) o.setAttachments(jsonStr(p.get("attachments")));
         if (p.containsKey("paid")) o.setPaid(asBool(p.get("paid")) ? 1 : 0);
-        if (by != null) o.setUnread(csvOthers(by));
+        o.setUnread(join(othersThan(newOwner, by)));
         o.setUpdateTime(new Date());
         orderMapper.update(o);
-        return getVO(id);
+
+        if (newOwner != null && !newOwner.equals(cur.getOwnerId()) && !newOwner.equals(by))
+        {
+            pushService.pushToMember(newOwner, "📌 项目已派给你", cur.getTitle() + dash(cur.getCustomer()));
+        }
+        return voOf(id);
     }
 
     // ---------- 删除 ----------
     @Override
     @Transactional
     public void delete(Long id)
+    {
+        guard(id);
+        doDelete(id);
+    }
+
+    @Override
+    @Transactional
+    public boolean deleteForCustomer(Long id, String account)
+    {
+        JiedanOrder o = orderMapper.selectById(id);
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return false;
+        doDelete(id);
+        return true;
+    }
+
+    private void doDelete(Long id)
     {
         bugUpdateMapper.deleteByOrderId(id);
         bugMapper.deleteByOrderId(id);
@@ -233,30 +304,18 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Override
     @Transactional
-    public boolean deleteForCustomer(Long id, String account)
-    {
-        JiedanOrder o = orderMapper.selectById(id);
-        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return false;
-        delete(id);
-        return true;
-    }
-
-    @Override
-    @Transactional
     public Map<String, Object> createBug(Map<String, Object> p)
     {
-        Long orderId = asLong(p.get("orderId"));
-        JiedanOrder o = orderMapper.selectById(orderId);
-        if (o == null) return null;
+        JiedanOrder o = guard(asLong(p.get("orderId")));
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        Long by = access.currentUserId();
+        String byName = access.currentName();
         Date now = new Date();
-        JiedanBug bug = insertBug(orderId, byName, asStr(p.get("content")), p.get("attachments"), now);
-        touchUnread(orderId, by, now);
-        pushOthers(by, "新 Bug", o.getTitle() + dash(byName));
-        return getVO(orderId);
+        insertBug(o.getId(), byName, asStr(p.get("content")), p.get("attachments"), now);
+        touchUnread(o, by, now);
+        pushRecipients(o, by, "新 Bug", o.getTitle() + dash(byName));
+        return voOf(o.getId());
     }
 
     @Override
@@ -265,11 +324,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         JiedanBug bug = bugMapper.selectById(bugId);
         if (bug == null) return null;
-        Long orderId = bug.getOrderId();
+        JiedanOrder o = guard(bug.getOrderId());
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
-        touchOrder(orderId, new Date());
-        return getVO(orderId);
+        touchOrder(o.getId(), new Date());
+        return voOf(o.getId());
     }
 
     @Override
@@ -278,17 +337,16 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         JiedanBug bug = bugMapper.selectById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
-        if (o == null) return null;
+        JiedanOrder o = guard(bug.getOrderId());
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        Long by = access.currentUserId();
+        String byName = access.currentName();
         Date now = new Date();
-        JiedanBugUpdate bugUpdate = insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
-        touchUnread(o.getId(), by, now);
-        pushOthers(by, "Bug 追加 QA", o.getTitle() + dash(byName));
-        return getVO(o.getId());
+        insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
+        touchUnread(o, by, now);
+        pushRecipients(o, by, "Bug 追加 QA", o.getTitle() + dash(byName));
+        return voOf(o.getId());
     }
 
     @Override
@@ -297,18 +355,16 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         JiedanBug bug = bugMapper.selectById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
-        if (o == null) return null;
+        JiedanOrder o = guard(bug.getOrderId());
 
         String status = normalizeBugStatus(p == null ? null : p.get("status"));
         bugMapper.updateStatus(bugId, status);
 
-        Long by = p == null ? null : asLong(p.get("byMemberId"));
-        String byName = memberName(by, p == null ? null : asStr(p.get("byUserName")));
-        Date now = new Date();
-        touchUnread(o.getId(), by, now);
-        pushOthers(by, "Bug 状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)));
-        return getVO(o.getId());
+        Long by = access.currentUserId();
+        String byName = access.currentName();
+        touchUnread(o, by, new Date());
+        pushRecipients(o, by, "Bug 状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)));
+        return voOf(o.getId());
     }
 
     @Override
@@ -322,14 +378,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        JiedanBug bug = insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
+        insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
 
-        JiedanOrder upd = new JiedanOrder();
-        upd.setId(orderId);
-        upd.setUnread(join(MEMBER_IDS));
-        upd.setUpdateTime(now);
-        orderMapper.update(upd);
-        pushOthers(null, "客户提交 Bug", o.getTitle() + dash(name));
+        markUnreadForCustomerAction(o, now);
+        pushRecipients(o, null, "客户提交 Bug", o.getTitle() + dash(name));
         return getForCustomer(orderId, account);
     }
 
@@ -343,11 +395,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
-        JiedanOrder upd = new JiedanOrder();
-        upd.setId(o.getId());
-        upd.setUnread(join(MEMBER_IDS));
-        upd.setUpdateTime(new Date());
-        orderMapper.update(upd);
+        markUnreadForCustomerAction(o, new Date());
         return getForCustomer(o.getId(), account);
     }
 
@@ -363,14 +411,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        JiedanBugUpdate bugUpdate = insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
+        insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
 
-        JiedanOrder upd = new JiedanOrder();
-        upd.setId(o.getId());
-        upd.setUnread(join(MEMBER_IDS));
-        upd.setUpdateTime(now);
-        orderMapper.update(upd);
-        pushOthers(null, "客户追加 Bug QA", o.getTitle() + dash(name));
+        markUnreadForCustomerAction(o, now);
+        pushRecipients(o, null, "客户追加 Bug QA", o.getTitle() + dash(name));
         return getForCustomer(o.getId(), account);
     }
 
@@ -388,12 +432,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        JiedanOrder upd = new JiedanOrder();
-        upd.setId(o.getId());
-        upd.setUnread(join(MEMBER_IDS));
-        upd.setUpdateTime(now);
-        orderMapper.update(upd);
-        pushOthers(null, "客户更新 Bug 状态", o.getTitle() + dash(name) + dash(bugStatusLabel(status)));
+        markUnreadForCustomerAction(o, now);
+        pushRecipients(o, null, "客户更新 Bug 状态", o.getTitle() + dash(name) + dash(bugStatusLabel(status)));
         return getForCustomer(o.getId(), account);
     }
 
@@ -401,6 +441,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Override
     public Map<String, Object> getNotes(Long id)
     {
+        guard(id);
         JiedanOrder o = orderMapper.selectNotesById(id);
         Map<String, Object> vo = new LinkedHashMap<>();
         vo.put("id", id);
@@ -415,6 +456,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Long id = asLong(p.get("id"));
         if (id == null) return null;
+        guard(id);
         JiedanOrder upd = new JiedanOrder();
         upd.setId(id);
         upd.setNotes(strOr(asStr(p.get("notes")), ""));
@@ -428,57 +470,54 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Override
     public Map<String, Object> addProgress(Map<String, Object> p)
     {
-        Long orderId = asLong(p.get("orderId"));
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        JiedanOrder o = guard(asLong(p.get("orderId")));
+        Long by = access.currentUserId();
+        String byName = access.currentName();
         String type = strOr(asStr(p.get("type")), "note");
         Date now = new Date();
-        addTimeline(orderId, byName, type, asStr(p.get("content")), jsonStr(p.get("attachments")), now);
-        touchUnread(orderId, by, now);
-        JiedanOrder o = orderMapper.selectById(orderId);
-        if (o != null) pushOthers(by, "💬 新动态", o.getTitle() + "：" + strOr(asStr(p.get("content")), "有新进度") + "（" + byName + "）");
-        return getVO(orderId);
+        addTimeline(o.getId(), byName, type, asStr(p.get("content")), jsonStr(p.get("attachments")), now);
+        touchUnread(o, by, now);
+        pushRecipients(o, by, "💬 新动态",
+                o.getTitle() + "：" + strOr(asStr(p.get("content")), "有新进度") + "（" + byName + "）");
+        return voOf(o.getId());
     }
 
     // ---------- 改状态 ----------
     @Override
     public Map<String, Object> changeStatus(Map<String, Object> p)
     {
-        Long id = asLong(p.get("id"));
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        JiedanOrder o = guard(asLong(p.get("id")));
+        Long by = access.currentUserId();
+        String byName = access.currentName();
         String status = asStr(p.get("status"));
         Date now = new Date();
 
         JiedanOrder upd = new JiedanOrder();
-        upd.setId(id);
+        upd.setId(o.getId());
         upd.setStatus(status);
         upd.setUpdateTime(now);
         orderMapper.update(upd);
 
         String label = STATUS_LABELS.getOrDefault(status, status);
-        addTimeline(id, byName, "status", "状态更新为「" + label + "」", null, now);
-        touchUnread(id, by, now);
-        JiedanOrder o = orderMapper.selectById(id);
-        if (o != null) pushOthers(by, "🔔 " + label, o.getTitle() + "（" + byName + "）");
-        return getVO(id);
+        addTimeline(o.getId(), byName, "status", "状态更新为「" + label + "」", null, now);
+        touchUnread(o, by, now);
+        pushRecipients(o, by, "🔔 " + label, o.getTitle() + "（" + byName + "）");
+        return voOf(o.getId());
     }
 
-    // ---------- 标记已读 ----------
+    // ---------- 标记已读（只能标记自己的） ----------
     @Override
     public Map<String, Object> markRead(Long id, Long memberId)
     {
-        JiedanOrder o = orderMapper.selectById(id);
-        if (o != null && memberId != null)
+        JiedanOrder o = guard(id);
+        Long me = access.currentUserId();
+        List<Long> unread = parseUnread(o.getUnread());
+        if (unread.remove(me))
         {
-            List<Long> unread = parseUnread(o.getUnread());
-            if (unread.remove(memberId))
-            {
-                JiedanOrder upd = new JiedanOrder();
-                upd.setId(id);
-                upd.setUnread(join(unread));
-                orderMapper.update(upd);
-            }
+            JiedanOrder upd = new JiedanOrder();
+            upd.setId(id);
+            upd.setUnread(join(unread));
+            orderMapper.update(upd);
         }
         return getVersion(id);
     }
@@ -487,84 +526,98 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Override
     public Map<String, Object> addRevision(Map<String, Object> p)
     {
-        Long id = asLong(p.get("id"));
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        JiedanOrder o = guard(asLong(p.get("id")));
+        Long by = access.currentUserId();
+        String byName = access.currentName();
         Date now = new Date();
-        JiedanOrder o = orderMapper.selectById(id);
-        if (o == null) return null;
         int n = (o.getRevisions() == null ? 0 : o.getRevisions()) + 1;
         JiedanOrder upd = new JiedanOrder();
-        upd.setId(id);
+        upd.setId(o.getId());
         upd.setRevisions(n);
         upd.setUpdateTime(now);
         orderMapper.update(upd);
-        addTimeline(id, byName, "note", "客户第 " + n + " 次改稿", null, now);
-        touchUnread(id, by, now);
-        pushOthers(by, "✏️ 客户改稿", o.getTitle() + " 第 " + n + " 次改稿");
-        return getVO(id);
+        addTimeline(o.getId(), byName, "note", "客户第 " + n + " 次改稿", null, now);
+        touchUnread(o, by, now);
+        pushRecipients(o, by, "✏️ 客户改稿", o.getTitle() + " 第 " + n + " 次改稿");
+        return voOf(o.getId());
     }
 
     // ---------- 催一下 ----------
     @Override
     public Map<String, Object> nudge(Map<String, Object> p)
     {
-        Long id = asLong(p.get("id"));
-        Long by = asLong(p.get("byMemberId"));
-        String byName = memberName(by, asStr(p.get("byUserName")));
+        JiedanOrder o = guard(asLong(p.get("id")));
+        Long by = access.currentUserId();
+        String byName = access.currentName();
         Date now = new Date();
-        JiedanOrder o = orderMapper.selectById(id);
-        if (o == null) return null;
-        // 催谁：优先催负责人；若自己就是负责人则催另一位
+        // 催谁：优先催负责人；若自己就是负责人则催总管理员
         Long target = o.getOwnerId();
         if (target == null || target.equals(by))
         {
-            target = MEMBER_IDS.stream().filter(m -> !m.equals(by)).findFirst().orElse(null);
+            target = null;
+            for (Long boss : access.bossUserIds())
+            {
+                if (!boss.equals(by))
+                {
+                    target = boss;
+                    break;
+                }
+            }
         }
-        addTimeline(id, byName, "note", byName + " 催了一下：" + o.getTitle(), null, now);
+        addTimeline(o.getId(), byName, "note", byName + " 催了一下：" + o.getTitle(), null, now);
         // 催办标记为目标未读
         if (target != null)
         {
             List<Long> unread = parseUnread(o.getUnread());
             if (!unread.contains(target)) unread.add(target);
             JiedanOrder upd = new JiedanOrder();
-            upd.setId(id);
+            upd.setId(o.getId());
             upd.setUnread(join(unread));
             upd.setUpdateTime(now);
             orderMapper.update(upd);
             pushService.pushToMember(target, "⏰ 催办", o.getTitle() + " —— " + byName + " 催你跟进");
         }
-        return getVO(id);
+        return voOf(o.getId());
     }
 
     // ---------- 推送设置 ----------
     @Override
     public Map<String, String> getPushConfig()
     {
+        boolean boss = access.isBoss();
+        String mine = sendKeyOf(access.currentUserId());
         Map<String, String> cfg = new LinkedHashMap<>();
         for (JiedanSetting s : settingMapper.selectAll())
         {
-            cfg.put(s.getSettingKey(), s.getSettingValue());
+            String key = s.getSettingKey();
+            // 下属管理员看不到别人的 SendKey
+            if (boss || !key.startsWith("push.sendkey.") || key.equals(mine))
+            {
+                cfg.put(key, s.getSettingValue());
+            }
         }
+        if (!boss && !cfg.containsKey(mine)) cfg.put(mine, "");
         return cfg;
     }
 
     @Override
     public void savePushConfig(Map<String, Object> p)
     {
+        boolean boss = access.isBoss();
+        String mine = sendKeyOf(access.currentUserId());
         for (Map.Entry<String, Object> e : p.entrySet())
         {
-            if (e.getKey() != null && e.getKey().startsWith("push."))
-            {
-                settingMapper.upsert(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
-            }
+            if (e.getKey() == null || !e.getKey().startsWith("push.")) continue;
+            if (!boss && !e.getKey().equals(mine)) throw new ServiceException("无权修改该推送设置");
+            settingMapper.upsert(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
         }
     }
 
     @Override
     public String testPush(Long memberId)
     {
-        return pushService.testPush(memberId);
+        Long target = access.isBoss() ? memberId : access.currentUserId();
+        return pushService.testPush(target);
     }
 
     // ---------- 定时：逾期/临近截止提醒 ----------
@@ -597,12 +650,59 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     // ================= 内部辅助 =================
-    private void pushOthers(Long by, String title, String content)
+    /** 取项目并校验当前登录人有权访问；不存在与无权访问返回同样的提示，避免泄露项目是否存在。 */
+    private JiedanOrder guard(Long id)
     {
-        for (Long m : MEMBER_IDS)
+        JiedanOrder o = id == null ? null : orderMapper.selectById(id);
+        if (o == null || !access.canAccess(o)) throw new ServiceException(JiedanAccess.DENIED);
+        return o;
+    }
+
+    /** 内部取详情（调用方已校验过权限）。 */
+    private Map<String, Object> voOf(Long id)
+    {
+        JiedanOrder o = orderMapper.selectById(id);
+        return o == null ? null : toVO(o, true);
+    }
+
+    /** 项目相关人：负责人 + 全体总管理员（去重）。 */
+    private List<Long> recipientIds(Long ownerId)
+    {
+        Set<Long> set = new LinkedHashSet<>();
+        if (ownerId != null) set.add(ownerId);
+        set.addAll(access.bossUserIds());
+        return new ArrayList<>(set);
+    }
+
+    /** 相关人里除去操作人自己（by 为空表示操作人不是后台成员，全员保留）。 */
+    private List<Long> othersThan(Long ownerId, Long by)
+    {
+        List<Long> list = recipientIds(ownerId);
+        if (by != null) list.remove(by);
+        return list;
+    }
+
+    private void pushRecipients(JiedanOrder o, Long by, String title, String content)
+    {
+        for (Long m : othersThan(o.getOwnerId(), by))
         {
-            if (!m.equals(by)) pushService.pushToMember(m, title, content);
+            pushService.pushToMember(m, title, content);
         }
+    }
+
+    /** 客户有动作：把项目的相关人全部置为未读。 */
+    private void markUnreadForCustomerAction(JiedanOrder o, Date now)
+    {
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(o.getId());
+        upd.setUnread(join(recipientIds(o.getOwnerId())));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+    }
+
+    private String sendKeyOf(Long userId)
+    {
+        return "push.sendkey." + userId;
     }
 
     private void addTimeline(Long orderId, String user, String type, String content, String attachments, Date time)
@@ -642,11 +742,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return update;
     }
 
-    private void touchUnread(Long orderId, Long by, Date now)
+    private void touchUnread(JiedanOrder o, Long by, Date now)
     {
         JiedanOrder upd = new JiedanOrder();
-        upd.setId(orderId);
-        upd.setUnread(csvOthers(by));
+        upd.setId(o.getId());
+        upd.setUnread(join(othersThan(o.getOwnerId(), by)));
         upd.setUpdateTime(now);
         orderMapper.update(upd);
     }
@@ -809,12 +909,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return "message".equals(type) || "reply".equals(type);
     }
 
-    private String memberName(Long memberId, String fallback)
-    {
-        if (memberId != null && MEMBER_NAMES.containsKey(memberId)) return MEMBER_NAMES.get(memberId);
-        return displayMemberName(strOr(fallback, "系统"));
-    }
-
     private String displayMemberName(String name)
     {
         return name == null ? null : LEGACY_MEMBER_NAMES.getOrDefault(name, name);
@@ -843,16 +937,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private String dash(String s)
     {
         return (s == null || s.trim().isEmpty()) ? "" : " · " + s;
-    }
-
-    private String csvOthers(Long by)
-    {
-        List<String> others = new ArrayList<>();
-        for (Long m : MEMBER_IDS)
-        {
-            if (!m.equals(by)) others.add(String.valueOf(m));
-        }
-        return String.join(",", others);
     }
 
     private List<Long> parseUnread(String csv)

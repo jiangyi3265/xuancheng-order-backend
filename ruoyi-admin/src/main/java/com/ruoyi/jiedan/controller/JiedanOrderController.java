@@ -161,27 +161,18 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.nudge(body));
     }
 
-    /** 客户需求提交：必须先登录客户账号。 */
+    /** 客户需求提交：必须先登录客户账号；负责人由该客户的归属管理员决定，不看前端传值。 */
     @PostMapping("/intake")
+    @PreAuthorize("@ss.hasRole('customer')")
     public AjaxResult intake(@RequestBody Map<String, Object> body)
     {
         String username = SecurityUtils.getUsername();
-        body.put("channel", "form");
-        body.put("status", "pending");
-        body.put("customerAccount", username);
+        body.remove("ownerId");
         body.remove("byMemberId");
-        if (StringUtils.isEmpty((String) body.get("customer")))
-        {
-            body.put("customer", username);
-        }
         if (StringUtils.isEmpty((String) body.get("byUserName")))
         {
             body.put("byUserName", "客户：" + username);
         }
-        if (body.get("ownerId") == null)
-        {
-            body.put("ownerId", 2);
-        }
-        return AjaxResult.success(service.create(body));
+        return AjaxResult.success(service.createFromCustomer(body, username));
     }
 }

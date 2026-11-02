@@ -173,6 +173,20 @@ LOCK TABLES `jiedan_timeline` WRITE;
 UNLOCK TABLES;
 
 --
+-- Table structure for table `jiedan_account_owner`
+-- 账号归属：下属管理员 -> 上级，客户 -> 负责管理员
+--
+
+DROP TABLE IF EXISTS `jiedan_account_owner`;
+CREATE TABLE `jiedan_account_owner` (
+  `user_id` bigint NOT NULL COMMENT '账号(sys_user.user_id)：下属管理员或客户',
+  `owner_user_id` bigint NOT NULL COMMENT '归属/上级管理员(sys_user.user_id)',
+  `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+  PRIMARY KEY (`user_id`),
+  KEY `idx_jiedan_account_owner_owner` (`owner_user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='账号归属（下属->上级、客户->负责管理员）';
+
+--
 -- Table structure for table `sys_config`
 --
 
@@ -518,7 +532,7 @@ CREATE TABLE `sys_role` (
 
 LOCK TABLES `sys_role` WRITE;
 /*!40000 ALTER TABLE `sys_role` DISABLE KEYS */;
-INSERT INTO `sys_role` VALUES (1,'超级管理员','admin',1,'1',1,1,'0','0','admin','2026-06-20 00:43:42','',NULL,'超级管理员'),(2,'客户','customer',2,'2',0,0,'0','0','admin','2026-06-22 00:00:00','',NULL,'客户提交需求专用角色');
+INSERT INTO `sys_role` VALUES (1,'超级管理员','admin',1,'1',1,1,'0','0','admin','2026-06-20 00:43:42','',NULL,'超级管理员'),(2,'客户','customer',2,'2',0,0,'0','0','admin','2026-06-22 00:00:00','',NULL,'客户提交需求专用角色'),(100,'下属管理员','employee',3,'1',1,1,'0','0','admin','2026-11-02 00:00:00','',NULL,'接单系统下属管理员，只能看到自己名下的项目');
 /*!40000 ALTER TABLE `sys_role` ENABLE KEYS */;
 UNLOCK TABLES;
 
