@@ -21,6 +21,7 @@
         <result property="noteAttachments" column="note_attachments" />
         <result property="unread"      column="unread"      />
         <result property="paid"        column="paid"        />
+        <result property="receivedAmount" column="received_amount" />
         <result property="revisions"   column="revisions"   />
         <result property="version"     column="version"     />
         <result property="createTime"  column="create_time" />
@@ -33,12 +34,12 @@
 
     <sql id="cols">
         id, order_no, title, channel, customer, customer_account, contact, amount, owner_id, status,
-        priority, deadline, requirement, attachments, unread, paid, revisions, version, create_time, update_time
+        priority, deadline, requirement, attachments, unread, paid, received_amount, revisions, version, create_time, update_time
     </sql>
 
     <sql id="trashCols">
         id, order_no, title, channel, customer, customer_account, contact, amount, owner_id, status,
-        priority, deadline, unread, paid, revisions, version, create_time, update_time,
+        priority, deadline, unread, paid, received_amount, revisions, version, create_time, update_time,
         del_flag, delete_time, delete_by, delete_by_id
     </sql>
 
@@ -64,6 +65,7 @@
             o.requirement as requirement,
             o.unread as unread,
             o.paid as paid,
+            o.received_amount as receivedAmount,
             o.revisions as revisions,
             o.version as version,
             o.create_time as createTime,
@@ -203,10 +205,10 @@
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanOrder" useGeneratedKeys="true" keyProperty="id">
         insert into jiedan_order
         (order_no, title, channel, customer, customer_account, contact, amount, owner_id, status, priority,
-         deadline, requirement, attachments, unread, paid, revisions, create_time, update_time)
+         deadline, requirement, attachments, unread, paid, received_amount, revisions, create_time, update_time)
         values
         (#{orderNo}, #{title}, #{channel}, #{customer}, #{customerAccount}, #{contact}, #{amount}, #{ownerId}, #{status}, #{priority},
-         #{deadline}, #{requirement}, #{attachments}, #{unread}, #{paid}, #{revisions}, #{createTime}, #{updateTime})
+         #{deadline}, #{requirement}, #{attachments}, #{unread}, #{paid}, #{receivedAmount}, #{revisions}, #{createTime}, #{updateTime})
     </insert>
 
     <update id="update" parameterType="com.ruoyi.jiedan.domain.JiedanOrder">
@@ -229,6 +231,7 @@
             <if test="noteAttachments != null">note_attachments = #{noteAttachments},</if>
             <if test="unread != null">unread = #{unread},</if>
             <if test="paid != null">paid = #{paid},</if>
+            <if test="receivedAmount != null">received_amount = #{receivedAmount},</if>
             <if test="revisions != null">revisions = #{revisions},</if>
             <if test="updateTime != null">update_time = #{updateTime},</if>
             version = version + 1

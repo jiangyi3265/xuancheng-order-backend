@@ -1,8 +1,10 @@
 package com.ruoyi.jiedan.service.impl;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -24,12 +26,14 @@ import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.domain.JiedanBug;
 import com.ruoyi.jiedan.domain.JiedanBugUpdate;
 import com.ruoyi.jiedan.domain.JiedanOrder;
+import com.ruoyi.jiedan.domain.JiedanPayment;
 import com.ruoyi.jiedan.domain.JiedanSetting;
 import com.ruoyi.jiedan.domain.JiedanTimeline;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugUpdateMapper;
 import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
+import com.ruoyi.jiedan.mapper.JiedanPaymentMapper;
 import com.ruoyi.jiedan.mapper.JiedanSettingMapper;
 import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
@@ -52,6 +56,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanTimelineMapper timelineMapper;
+
+    @Autowired
+    private JiedanPaymentMapper paymentMapper;
 
     @Autowired
     private JiedanBugMapper bugMapper;
@@ -156,8 +163,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             if (!channel.isEmpty() && !channel.equals(asStr(vo.get("channel")))) continue;
             if (!status.isEmpty() && !status.equals(st)) continue;
             if (ownerId != null && !ownerId.equals(asLong(vo.get("ownerId")))) continue;
-            if ("1".equals(paid) && !asBool(vo.get("paid"))) continue;
-            if ("0".equals(paid) && asBool(vo.get("paid"))) continue;
+            // 收款：1=已收清 0=还欠款（报价大于已收） part=收了一部分
+            BigDecimal amt = asDecimal(vo.get("amount"));
+            BigDecimal rec = asDecimal(vo.get("receivedAmount"));
+            boolean full = isFullyPaid(rec, amt);
+            if ("1".equals(paid) && !full) continue;
+            if ("0".equals(paid) && amt.compareTo(rec) <= 0) continue;
+            if ("part".equals(paid) && !(rec.signum() > 0 && !full)) continue;
             if (overdueOnly && !(Arrays.asList("pending", "doing", "review").contains(st)
                     && !dl.isEmpty() && dl.compareTo(today) < 0)) continue;
             if (!createFrom.isEmpty() && createDay.compareTo(createFrom) < 0) continue;
@@ -167,7 +179,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             if (!keyword.isEmpty())
             {
                 String hay = (strOr(asStr(vo.get("title")), "") + " " + strOr(asStr(vo.get("customer")), "")
-                        + " " + strOr(asStr(vo.get("orderNo")), "")).toLowerCase();
+                        + " " + strOr(asStr(vo.get("orderNo")), "") + " " + strOr(asStr(vo.get("contact")), "")
+                        + " " + strOr(asStr(vo.get("requirement")), "")).toLowerCase();
                 if (!hay.contains(keyword)) continue;
             }
             result.add(vo);
@@ -265,13 +278,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         o.setContact(asStr(p.get("contact")));
         o.setAmount(asDecimal(p.get("amount")));
         o.setOwnerId(ownerId);
-        o.setStatus(strOr(asStr(p.get("status")), "pending"));
+        o.setStatus(checkStatus(strOr(asStr(p.get("status")), "pending")));
         o.setPriority(strOr(asStr(p.get("priority")), "medium"));
         o.setDeadline(asStr(p.get("deadline")));
         o.setRequirement(asStr(p.get("requirement")));
         o.setAttachments(jsonStr(p.get("attachments")));
         o.setUnread(join(othersThan(ownerId, by)));
         o.setPaid(0);
+        o.setReceivedAmount(BigDecimal.ZERO);
         o.setRevisions(0);
         o.setCreateTime(now);
         o.setUpdateTime(now);
@@ -316,7 +330,12 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             o.setCustomerAccount(account);
         }
         if (p.containsKey("contact")) o.setContact(asStr(p.get("contact")));
-        if (p.containsKey("amount")) o.setAmount(asDecimal(p.get("amount")));
+        if (p.containsKey("amount"))
+        {
+            o.setAmount(asDecimal(p.get("amount")));
+            // 改了报价，“是否已收清”要跟着重新算（已收金额不变）
+            o.setPaid(isFullyPaid(cur.getReceivedAmount(), o.getAmount()) ? 1 : 0);
+        }
 
         Long newOwner = cur.getOwnerId();
         if (p.containsKey("ownerId"))
@@ -330,12 +349,12 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 newOwner = requested;
             }
         }
-        if (p.containsKey("status")) o.setStatus(asStr(p.get("status")));
+        if (p.containsKey("status") && asStr(p.get("status")) != null) o.setStatus(checkStatus(asStr(p.get("status"))));
         if (p.containsKey("priority")) o.setPriority(asStr(p.get("priority")));
         if (p.containsKey("deadline")) o.setDeadline(asStr(p.get("deadline")));
         if (p.containsKey("requirement")) o.setRequirement(asStr(p.get("requirement")));
         if (p.containsKey("attachments")) o.setAttachments(jsonStr(p.get("attachments")));
-        if (p.containsKey("paid")) o.setPaid(asBool(p.get("paid")) ? 1 : 0);
+        // 收款不走这里：已收金额只由「收款流水」（addPayment / deletePayment）推算，前端传来的 paid / receivedAmount 一律忽略
         o.setUnread(join(othersThan(newOwner, by)));
         o.setUpdateTime(new Date());
         List<String> changes = describeChanges(cur, o);
@@ -488,6 +507,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     /** 彻底删除一个项目及其所有留言、Bug、进度（不可恢复，只给回收站用）。 */
     private void doDelete(Long id)
     {
+        paymentMapper.deleteByOrderId(id);
         bugUpdateMapper.deleteByOrderId(id);
         bugMapper.deleteByOrderId(id);
         timelineMapper.deleteByOrderId(id);
@@ -683,7 +703,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         JiedanOrder o = guard(asLong(p.get("id")));
         Long by = access.currentUserId();
         String byName = access.currentName();
-        String status = asStr(p.get("status"));
+        String status = checkStatus(asStr(p.get("status")));
         Date now = new Date();
 
         JiedanOrder upd = new JiedanOrder();
@@ -845,6 +865,130 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return count;
     }
 
+    // ================= 收款流水 =================
+    private static final BigDecimal PAYMENT_MAX = new BigDecimal("99999999.99");
+
+    /** 记一笔收款。已收金额、是否收清都由流水合计推算；订单的版本号随之 +1，其他设备会自动刷新。 */
+    @Override
+    @Transactional
+    public Map<String, Object> addPayment(Long orderId, Map<String, Object> p)
+    {
+        JiedanOrder o = guard(orderId);
+        BigDecimal amount = parseMoney(p.get("amount"));
+        if (amount.signum() <= 0) throw new ServiceException("收款金额要大于 0");
+        if (amount.compareTo(PAYMENT_MAX) > 0) throw new ServiceException("收款金额太大，请检查是否多输了几位");
+
+        String payDate = strOr(asStr(p.get("payDate")), LocalDate.now().toString()).trim();
+        LocalDate day;
+        try { day = LocalDate.parse(payDate); }
+        catch (Exception e) { throw new ServiceException("收款日期格式不对，应为 年-月-日"); }
+        if (day.isAfter(LocalDate.now().plusDays(1))) throw new ServiceException("收款日期不能是将来的日期");
+
+        String note = strOr(asStr(p.get("note")), "").trim();
+        if (note.length() > 200) throw new ServiceException("备注最多 200 个字");
+
+        Date now = new Date();
+        JiedanPayment pay = new JiedanPayment();
+        pay.setOrderId(orderId);
+        pay.setAmount(amount);
+        pay.setPayDate(day.toString());
+        pay.setNote(note);
+        pay.setCreatedBy(access.currentName());
+        pay.setCreateTime(now);
+        paymentMapper.insert(pay);
+
+        JiedanOrder after = syncReceived(o, now);
+        audit.record("payment.add", "order", orderId, o.getTitle(),
+                "收款 " + money(amount) + "（" + day + (note.isEmpty() ? "" : "，" + note) + "）；"
+                        + "累计已收 " + money(after.getReceivedAmount()) + " / 报价 " + money(o.getAmount()));
+        return voOf(orderId);
+    }
+
+    /** 删掉记错的一笔收款（留痕）。 */
+    @Override
+    @Transactional
+    public Map<String, Object> deletePayment(Long paymentId)
+    {
+        JiedanPayment pay = paymentId == null ? null : paymentMapper.selectById(paymentId);
+        if (pay == null) throw new ServiceException("这笔收款不存在");
+        JiedanOrder o = guard(pay.getOrderId());
+        paymentMapper.deleteById(paymentId);
+        JiedanOrder after = syncReceived(o, new Date());
+        audit.record("payment.delete", "order", o.getId(), o.getTitle(),
+                "删除一笔收款 " + money(pay.getAmount()) + "（" + pay.getPayDate() + "）；累计已收 "
+                        + money(after.getReceivedAmount()) + " / 报价 " + money(o.getAmount()));
+        return voOf(o.getId());
+    }
+
+    /** 实收统计（只含我能看到的项目）：本月、累计、最近 6 个月逐月。 */
+    @Override
+    public Map<String, Object> income()
+    {
+        Long scope = access.ownerScope();
+        YearMonth thisMonth = YearMonth.now();
+        YearMonth first = thisMonth.minusMonths(5);
+        Map<String, BigDecimal> byMonth = new LinkedHashMap<>();
+        for (int i = 0; i < 6; i++) byMonth.put(first.plusMonths(i).toString(), BigDecimal.ZERO);
+        for (Map<String, Object> row : paymentMapper.selectMonthlyIncome(scope, first.atDay(1).toString()))
+        {
+            String m = asStr(row.get("month"));
+            if (m != null && byMonth.containsKey(m)) byMonth.put(m, asDecimal(row.get("amount")));
+        }
+        List<Map<String, Object>> months = new ArrayList<>();
+        for (Map.Entry<String, BigDecimal> e : byMonth.entrySet())
+        {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("month", e.getKey());
+            m.put("amount", e.getValue());
+            months.add(m);
+        }
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("thisMonth", byMonth.get(thisMonth.toString()));
+        vo.put("total", paymentMapper.selectTotalIncome(scope));
+        vo.put("months", months);
+        return vo;
+    }
+
+    /** 按流水重新算订单的已收金额和是否收清。 */
+    private JiedanOrder syncReceived(JiedanOrder o, Date now)
+    {
+        BigDecimal sum = paymentMapper.sumByOrderId(o.getId());
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(o.getId());
+        upd.setReceivedAmount(sum);
+        upd.setPaid(isFullyPaid(sum, o.getAmount()) ? 1 : 0);
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+        return upd;
+    }
+
+    /** 已收清 = 收到过钱，并且不少于报价。报价为 0（还没报价）收到钱也算收清。 */
+    private boolean isFullyPaid(BigDecimal received, BigDecimal amount)
+    {
+        BigDecimal r = received == null ? BigDecimal.ZERO : received;
+        BigDecimal a = amount == null ? BigDecimal.ZERO : amount;
+        return r.signum() > 0 && r.compareTo(a) >= 0;
+    }
+
+    private BigDecimal parseMoney(Object o)
+    {
+        if (o == null) throw new ServiceException("请填写收款金额");
+        try
+        {
+            return new BigDecimal(o.toString().trim()).setScale(2, RoundingMode.HALF_UP);
+        }
+        catch (Exception e)
+        {
+            throw new ServiceException("收款金额格式不对");
+        }
+    }
+
+    private String checkStatus(String status)
+    {
+        if (status == null || !STATUS_LABELS.containsKey(status)) throw new ServiceException("项目状态不正确");
+        return status;
+    }
+
     // ================= 内部辅助 =================
     /** 取项目并校验当前登录人有权访问；不存在与无权访问返回同样的提示，避免泄露项目是否存在。 */
     private JiedanOrder guard(Long id)
@@ -998,6 +1142,24 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("updateTime", fmt(o.getUpdateTime()));
         vo.put("attachments", normalizedAttachments(o.getAttachments(), "order", o.getId()));
         vo.put("unread", parseUnread(o.getUnread()));
+        if (includeInternal)
+        {
+            // 收款明细属于内部账目，客户看不到
+            vo.put("receivedAmount", o.getReceivedAmount() == null ? BigDecimal.ZERO : o.getReceivedAmount());
+            List<Map<String, Object>> payments = new ArrayList<>();
+            for (JiedanPayment pay : paymentMapper.selectByOrderId(o.getId()))
+            {
+                Map<String, Object> pm = new LinkedHashMap<>();
+                pm.put("id", pay.getId());
+                pm.put("amount", pay.getAmount());
+                pm.put("payDate", pay.getPayDate());
+                pm.put("note", pay.getNote());
+                pm.put("createdBy", displayMemberName(pay.getCreatedBy()));
+                pm.put("createTime", fmt(pay.getCreateTime()));
+                payments.add(pm);
+            }
+            vo.put("payments", payments);
+        }
 
         Map<Long, List<JiedanBugUpdate>> updatesByBug = new LinkedHashMap<>();
         for (JiedanBugUpdate update : bugUpdateMapper.selectByOrderId(o.getId()))
@@ -1091,6 +1253,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Map<String, Object> vo = toListSummaryVO(row);
         vo.put("contact", row.get("contact"));
+        vo.put("receivedAmount", asDecimal(row.get("receivedAmount")));
         vo.put("unread", parseUnread(asStr(row.get("unread"))));
         vo.put("attachmentCount", row.get("attachmentCount") == null ? 0 : row.get("attachmentCount"));
         vo.put("bugCount", row.get("bugCount") == null ? 0 : row.get("bugCount"));

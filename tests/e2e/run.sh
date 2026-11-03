@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键端到端测试：建临时库 -> 起后端 -> 跑权限测试和补丁包测试 -> 全部清理。
+# 一键端到端测试：建临时库 -> 起后端 -> 跑权限、补丁包、记单收款三套测试 -> 全部清理。
 #
 # 必填环境变量：
 #   E2E_REDIS_DB     一个**空的** Redis 库编号（脚本启动前会检查，非空就拒绝运行，
@@ -111,16 +111,19 @@ data_fingerprint() {
 if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
   # 升级演练：旧版库（线上现状）+ 旧版数据 -> 按上线清单的顺序执行两个升级脚本 -> 再跑全部测试
   [ -f "$E2E_OLD_SCHEMA_SQL" ] || die "找不到旧版建库脚本：$E2E_OLD_SCHEMA_SQL"
-  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1"
+  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1 -> upgrade_solo_v1"
   new_db "$DB"
   mysql_db "$DB" < "$E2E_OLD_SCHEMA_SQL" || die "导入旧版建库脚本失败"
   mysql_db "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
+  # 模拟线上旧版里“标记过已收款”的订单（旧版没有入口，但数据库里允许），用来检查升级会补录收款流水
+  mysql_db "$DB" -e "update jiedan_order set paid=1 where id=4" || die "准备旧版已收款数据失败"
   BEFORE="$(data_fingerprint)"
   for round in 1 2; do
     mysql_db "$DB" < "$ROOT/deploy/upgrade_permission_v1.sql" || die "upgrade_permission_v1.sql 第 $round 次执行失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_hardening_v1.sql" || die "upgrade_hardening_v1.sql 第 $round 次执行失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_solo_v1.sql" || die "upgrade_solo_v1.sql 第 $round 次执行失败"
   done
-  echo "   两个升级脚本各执行两遍（含幂等性）：成功"
+  echo "   三个升级脚本各执行两遍（含幂等性）：成功"
   AFTER="$(data_fingerprint)"
   if [ "$BEFORE" != "$AFTER" ]; then
     echo "错误：升级脚本改动了已有业务数据" >&2
@@ -128,6 +131,13 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     exit 4
   fi
   echo "   升级前后已有业务数据完全一致（订单/时间线/Bug/账号/角色关系/设置）"
+  BACKFILL="$(mysql_db -N -B "$DB" -e "select (select count(*) from jiedan_payment where order_id=4 and note='升级前已标记收款'), (select concat(received_amount,'|',paid) from jiedan_order where id=4), (select count(*) from jiedan_payment), (select sum(received_amount) from jiedan_order where id<>4)")"
+  EXPECT_BACKFILL="$(printf '1	4000.00|1	1	0.00')"
+  if [ "$BACKFILL" != "$EXPECT_BACKFILL" ]; then
+    echo "错误：升级对旧版已收款订单的收款流水补录不对（期望：1 条补录、订单4=4000.00|1、流水共 1 条、其余订单已收为 0），实际：$BACKFILL" >&2
+    exit 4
+  fi
+  echo "   旧版标记过已收款的订单，升级后补录了整笔收款流水(仅 1 条、重复执行不会重复补)；其余订单未受影响"
   # 与全新安装的结构逐项比对，防止“升级出来的库”和“新装的库”悄悄不一样
   DB_REF="${DB}_ref"
   new_db "$DB_REF"
@@ -170,7 +180,7 @@ fi
 
 export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER"
 RC=0
-for t in permission hardening; do
+for t in permission hardening solo; do
   echo
   echo "################ $t.test.mjs ################"
   node "$HERE/$t.test.mjs" || RC=1

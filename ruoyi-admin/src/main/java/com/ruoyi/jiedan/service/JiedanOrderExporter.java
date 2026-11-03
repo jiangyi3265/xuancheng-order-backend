@@ -56,10 +56,10 @@ public class JiedanOrderExporter
     }};
 
     private static final String[] HEADERS = {
-        "编号", "项目名", "客户", "联系方式", "渠道", "负责人", "状态", "优先级", "金额(元)", "收款",
+        "编号", "项目名", "客户", "联系方式", "渠道", "负责人", "状态", "优先级", "报价(元)", "已收(元)", "未收(元)", "收款情况",
         "截止日期", "创建时间", "最近更新", "改稿次数", "Bug 数", "需求说明"
     };
-    private static final int[] WIDTHS = { 16, 30, 16, 18, 10, 12, 10, 8, 12, 8, 12, 17, 17, 10, 8, 60 };
+    private static final int[] WIDTHS = { 16, 30, 16, 18, 10, 12, 10, 8, 12, 12, 12, 10, 12, 17, 17, 10, 8, 60 };
 
     @Autowired
     private JiedanAccountMapper accountMapper;
@@ -105,7 +105,15 @@ public class JiedanOrderExporter
                 Cell amount = row.createCell(c++);
                 amount.setCellValue(decimal(vo.get("amount")).doubleValue());
                 amount.setCellStyle(money);
-                text(row, c++, Boolean.TRUE.equals(vo.get("paid")) ? "已收款" : "未收款");
+                BigDecimal quoted = decimal(vo.get("amount"));
+                BigDecimal received = decimal(vo.get("receivedAmount"));
+                Cell recCell = row.createCell(c++);
+                recCell.setCellValue(received.doubleValue());
+                recCell.setCellStyle(money);
+                Cell owedCell = row.createCell(c++);
+                owedCell.setCellValue(quoted.subtract(received).max(BigDecimal.ZERO).doubleValue());
+                owedCell.setCellStyle(money);
+                text(row, c++, payLabel(quoted, received));
                 text(row, c++, vo.get("deadline"));
                 text(row, c++, vo.get("createTime"));
                 text(row, c++, vo.get("updateTime"));
@@ -118,6 +126,13 @@ public class JiedanOrderExporter
             wb.write(out);
             return out.toByteArray();
         }
+    }
+
+    /** 收款情况：没报价 / 未收 / 部分已收 / 已收清 */
+    private String payLabel(BigDecimal quoted, BigDecimal received)
+    {
+        if (received.signum() <= 0) return quoted.signum() > 0 ? "未收" : "未报价";
+        return received.compareTo(quoted) >= 0 ? "已收清" : "部分已收";
     }
 
     private Map<Long, String> ownerNames()

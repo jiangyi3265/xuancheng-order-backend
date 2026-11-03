@@ -24,6 +24,7 @@ Windows + Git Bash 下如果设置了 `HTTP_PROXY`，脚本里的等待逻辑已
 3. 依次运行：
    - `permission.test.mjs`：总管理员 / 下属管理员 / 客户的数据隔离、转派、客户归属、停用与改密踢下线、旧订单负责人迁移脚本。
    - `hardening.test.mjs`：变更戳、回收站（软删除/恢复/彻底删除/原负责人停用后的恢复）、客户撤回限制、操作日志（含日志表故障时业务不受影响）、改密码、Excel 导出（含权限范围与筛选）、附件安全头与上传鉴权、Druid 监控页关闭。
+   - `solo.test.mjs`：记单收款版——收款流水（记/删/校验/多收）、已收与是否收清的自动推算（含改报价后重算、忽略前端直接传的 paid）、权限范围（下属只能动自己的项目、客户看不到收款）、实收统计 /income、导出的已收/未收/收款情况与三种收款筛选、联系方式和需求内容的关键字搜索、状态值校验、彻底删除连带清掉流水、操作日志。
 4. 删临时库、清 Redis、删临时文件。失败时后端日志会留在 `tests/e2e/last-backend.log`。
 
 ## 升级演练模式（上线前必跑）
@@ -36,7 +37,7 @@ git show 9489439:deploy/fresh-install.sql > /tmp/old-fresh-install.sql
 MYSQL_PWD=<本机MySQL密码> E2E_REDIS_DB=10 E2E_OLD_SCHEMA_SQL=/tmp/old-fresh-install.sql bash tests/e2e/run.sh
 ```
 
-脚本会依次：旧结构建库 → 导入 `seed.sql` 旧数据 → 按清单顺序执行 `upgrade_permission_v1.sql`、`upgrade_hardening_v1.sql`（各跑两遍，验证可重复执行）→ 核对升级前后订单/时间线/Bug/账号/设置的数据指纹完全一致 → 与 `fresh-install.sql` 新建出来的库逐项比对表、列、索引、employee 角色 → 再起新后端跑全部检查。任何一步不一致就会中止并打印差异。
+脚本会依次：旧结构建库 → 导入 `seed.sql` 旧数据 → 按清单顺序执行 `upgrade_permission_v1.sql`、`upgrade_hardening_v1.sql`、`upgrade_solo_v1.sql`（各跑两遍，验证可重复执行）→ 核对升级前后订单/时间线/Bug/账号/设置的数据指纹完全一致 → 与 `fresh-install.sql` 新建出来的库逐项比对表、列、索引、employee 角色 → 检查旧版里标记过“已收款”的订单被补录成一条整笔收款流水 → 再起新后端跑全部检查。任何一步不一致就会中止并打印差异。
 
 ## 注意
 

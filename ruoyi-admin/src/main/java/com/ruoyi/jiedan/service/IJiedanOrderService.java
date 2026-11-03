@@ -17,6 +17,15 @@ public interface IJiedanOrderService
     /** 在“我能看到的项目”里按条件筛选（关键字/渠道/负责人/状态/收款/逾期/日期），导出用 */
     List<Map<String, Object>> listFiltered(Map<String, String> filters);
 
+    /** 记一笔收款（金额 / 日期 / 备注），返回更新后的项目详情 */
+    Map<String, Object> addPayment(Long orderId, Map<String, Object> payload);
+
+    /** 删除一笔收款，返回更新后的项目详情 */
+    Map<String, Object> deletePayment(Long paymentId);
+
+    /** 实收统计：本月、累计、最近 6 个月逐月（只含我能看到的项目） */
+    Map<String, Object> income();
+
     /** 回收站列表：总管理员看全部，下属管理员只看自己名下 */
     List<Map<String, Object>> listTrash();
 

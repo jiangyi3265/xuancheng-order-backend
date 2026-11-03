@@ -41,6 +41,7 @@ CREATE TABLE `jiedan_order` (
   `note_attachments` longtext COMMENT '记事本附件(JSON,内部)',
   `unread` varchar(50) DEFAULT '' COMMENT '未读成员(逗号分隔)',
   `paid` tinyint(1) DEFAULT '0' COMMENT '是否收款',
+  `received_amount` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '已收金额(收款流水合计)',
   `revisions` int DEFAULT '0' COMMENT '改稿次数',
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   `update_time` datetime DEFAULT NULL COMMENT '更新时间',
@@ -190,6 +191,24 @@ CREATE TABLE `jiedan_account_owner` (
   PRIMARY KEY (`user_id`),
   KEY `idx_jiedan_account_owner_owner` (`owner_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='账号归属（下属->上级、客户->负责管理员）';
+
+--
+-- Table structure for table `jiedan_payment`
+--
+
+DROP TABLE IF EXISTS `jiedan_payment`;
+CREATE TABLE `jiedan_payment` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '收款ID',
+  `order_id` bigint NOT NULL COMMENT '订单ID',
+  `amount` decimal(12,2) NOT NULL COMMENT '本次收款金额',
+  `pay_date` varchar(10) NOT NULL COMMENT '收款日期 yyyy-MM-dd',
+  `note` varchar(200) DEFAULT '' COMMENT '备注，如 定金/尾款/微信转账',
+  `created_by` varchar(64) DEFAULT '' COMMENT '记录人',
+  `create_time` datetime NOT NULL COMMENT '记录时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_payment_order` (`order_id`),
+  KEY `idx_jiedan_payment_date` (`pay_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='收款流水';
 
 --
 -- Table structure for table `jiedan_audit_log`

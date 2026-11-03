@@ -93,6 +93,30 @@ public class JiedanOrderController extends BaseController
         response.getOutputStream().write(bytes);
     }
 
+    /** 实收统计：本月、累计、最近 6 个月逐月。 */
+    @GetMapping("/income")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult income()
+    {
+        return AjaxResult.success(service.income());
+    }
+
+    /** 记一笔收款。 */
+    @PostMapping("/{id}/payment")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult addPayment(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.addPayment(id, body));
+    }
+
+    /** 删除一笔记错的收款。 */
+    @DeleteMapping("/payment/{paymentId}")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult removePayment(@PathVariable Long paymentId)
+    {
+        return AjaxResult.success(service.deletePayment(paymentId));
+    }
+
     /** 回收站：总管理员看全部，下属管理员只看自己名下。 */
     @GetMapping("/trash")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")

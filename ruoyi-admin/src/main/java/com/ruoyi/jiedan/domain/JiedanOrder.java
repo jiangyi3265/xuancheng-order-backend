@@ -30,7 +30,10 @@ public class JiedanOrder
     private String noteAttachments;
     /** 未读成员 id，逗号分隔 */
     private String unread;
+    /** 是否已收清：由收款流水自动推算（已收 > 0 且 ≥ 报价），不接受前端直接设置 */
     private Integer paid;
+    /** 已收金额 = 收款流水合计 */
+    private BigDecimal receivedAmount;
     private Integer revisions;
     /** 数据版本，每次项目内容变化自动递增，用于轻量实时同步 */
     private Long version;
@@ -79,6 +82,8 @@ public class JiedanOrder
     public void setUnread(String unread) { this.unread = unread; }
     public Integer getPaid() { return paid; }
     public void setPaid(Integer paid) { this.paid = paid; }
+    public BigDecimal getReceivedAmount() { return receivedAmount; }
+    public void setReceivedAmount(BigDecimal receivedAmount) { this.receivedAmount = receivedAmount; }
     public Integer getRevisions() { return revisions; }
     public void setRevisions(Integer revisions) { this.revisions = revisions; }
     public Long getVersion() { return version; }
