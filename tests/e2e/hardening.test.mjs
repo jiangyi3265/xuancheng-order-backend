@@ -6,6 +6,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { BASE, ok, call, raw, login, good, denied, sql, section, finish } from './lib.mjs'
 
+// 员工删除项目现在要先申请、老板批准（详见 flow.test.mjs）。这里只关心“进回收站”，所以走完整的申请 + 批准。
+async function staffDelete(token, bossToken, id) {
+  const r = await call(token, 'POST', '/jiedan/approval', { orderId: id, type: 'delete', reason: '测试删除' })
+  if (!good(r)) return r
+  return call(bossToken, 'POST', `/jiedan/approval/${r.data.id}/approve`)
+}
+
 const has = (rows, fn) => Array.isArray(rows) && rows.some(fn)
 
 async function upload(token, name, bytes, type) {
@@ -76,18 +83,19 @@ ok('无令牌不能调用 stamp', denied(await call(null, 'GET', '/jiedan/order/
 section('C 回收站：删除不是真删')
 const stampBeforeDelete = await stampOf(t1)
 await call(t1, 'POST', '/jiedan/order/progress', { orderId: o1, content: '一条进度', type: 'note' })
-ok('hs1 删除自己的项目', good(await call(t1, 'DELETE', '/jiedan/order/' + o1)))
+ok('hs1 直接删除被拒（要先申请）', denied(await call(t1, 'DELETE', '/jiedan/order/' + o1)))
+ok('hs1 申请删除、老板批准后进回收站', good(await staffDelete(t1, boss, o1)))
 ok('删除后详情读不到', denied(await call(t1, 'GET', '/jiedan/order/' + o1)))
 ok('删除后版本接口读不到', denied(await call(t1, 'GET', `/jiedan/order/${o1}/version`)))
 ok('删除后不在列表里', !has((await call(t1, 'GET', '/jiedan/order/list')).data, (o) => o.id === o1))
 ok('删除后变更戳变了', (await stampOf(t1)) !== stampBeforeDelete)
 ok('数据库里是软删除 del_flag=1', sql(`select del_flag from jiedan_order where id=${o1}`) === '1')
 ok('留言/进度还在(没被物理删除)', Number(sql(`select count(*) from jiedan_timeline where order_id=${o1}`)) >= 2)
-ok('删除人被记录', sql(`select delete_by from jiedan_order where id=${o1}`) === '小周')
+ok('删除人被记录', sql(`select delete_by from jiedan_order where id=${o1}`) === '尚琦凯')
 ok('删除后不能再改', denied(await call(t1, 'PUT', '/jiedan/order', { id: o1, title: 'x' })))
 ok('删除后不能再记事本', denied(await call(t1, 'GET', '/jiedan/order/notes/' + o1)))
 let trash = await call(t1, 'GET', '/jiedan/order/trash')
-ok('hs1 回收站里有它', good(trash) && has(trash.data, (x) => x.id === o1 && x.deleteBy === '小周'), JSON.stringify(trash))
+ok('hs1 回收站里有它', good(trash) && has(trash.data, (x) => x.id === o1 && x.deleteBy === '尚琦凯'), JSON.stringify(trash))
 ok('hs1 回收站里看不到别人的项目', !has(trash.data, (x) => x.id === o2))
 ok('回收站的时间是「年-月-日 时:分」，不是带 T 的原始格式', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(trash.data.find((x) => x.id === o1)?.deleteTime || ''), JSON.stringify(trash.data[0]))
 ok('成员列表的项目数不含回收站', (await call(boss, 'GET', '/jiedan/staff/list')).data.find((x) => x.id === hs1).orderCount === 0)
@@ -114,7 +122,7 @@ ok('彻底删除连带清掉进度', sql(`select count(*) from jiedan_timeline w
 // 原负责人被停用后恢复：改由恢复人接手
 r = await call(t1, 'POST', '/jiedan/order', { title: 'H-停用后恢复', customer: '丙' })
 const o4 = r.data.id
-await call(t1, 'DELETE', '/jiedan/order/' + o4)
+await staffDelete(t1, boss, o4)
 ok('停用 hs1', good(await call(boss, 'PUT', '/jiedan/staff/status', { userId: hs1, status: '1' })))
 ok('总管理员恢复，原负责人不可用 -> 改派给总管理员', good(await call(boss, 'PUT', `/jiedan/order/${o4}/restore`)))
 ok('负责人变成总管理员', sql(`select owner_id from jiedan_order where id=${o4}`) === String(bossId))
@@ -140,17 +148,17 @@ r = await call(c1, 'DELETE', '/jiedan/portal/orders/' + k2)
 ok('团队已接手(进行中)后，客户不能自行删除', denied(r) && /处理中/.test(r.msg || ''), JSON.stringify(r))
 ok('项目仍然完好', sql(`select del_flag from jiedan_order where id=${k2}`) === '0')
 ok('客户不能删别的客户的项目', denied(await call(c2, 'DELETE', '/jiedan/portal/orders/' + k2)))
-await call(t1b, 'PUT', '/jiedan/order/status', { id: k2, status: 'done' })
+await call(boss, 'PUT', '/jiedan/order/status', { id: k2, status: 'done' })
 ok('已完成的项目客户更不能删', denied(await call(c1, 'DELETE', '/jiedan/portal/orders/' + k2)))
 
 section('E 操作日志')
 // paid / receivedAmount 由收款流水推算，前端直接传来的值必须被忽略（见 solo.test.mjs）
-await call(t1b, 'PUT', '/jiedan/order', { id: k2, amount: 1500, deadline: '2030-01-01', paid: true, receivedAmount: 1500 })
+await call(boss, 'PUT', '/jiedan/order', { id: k2, amount: 1500, deadline: '2030-01-01', paid: true, receivedAmount: 1500 })
 await call(boss, 'PUT', '/jiedan/order', { id: k2, ownerId: bossId })
 let rows = await auditRows(boss)
 ok('总管理员能查日志', rows.length > 0)
 const delRows = await auditRows(boss, '&action=order.delete')
-ok('有「删除项目」记录，记录了操作人', has(delRows, (x) => x.targetId === o1 && x.actorName === '小周' && x.actorRole === 'employee'))
+ok('有「删除项目」记录，记录了操作人', has(delRows, (x) => x.targetId === o1 && x.actorName === '尚琦凯' && x.actorRole === 'boss'))
 ok('有「恢复项目」记录', has(await auditRows(boss, '&action=order.restore'), (x) => x.targetId === o1))
 ok('有「彻底删除」记录', has(await auditRows(boss, '&action=order.purge'), (x) => x.targetId === o2 && x.actorRole === 'boss'))
 ok('客户撤回被记录为客户操作', has(delRows, (x) => x.targetId === k1 && x.actorRole === 'customer'))

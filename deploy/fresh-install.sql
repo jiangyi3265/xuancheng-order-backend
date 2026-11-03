@@ -42,6 +42,7 @@ CREATE TABLE `jiedan_order` (
   `unread` varchar(50) DEFAULT '' COMMENT '未读成员(逗号分隔)',
   `paid` tinyint(1) DEFAULT '0' COMMENT '是否收款',
   `received_amount` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '已收金额(收款流水合计)',
+  `assign_state` varchar(10) NOT NULL DEFAULT '' COMMENT '接收状态：空=无需接收/已接收 pending=等负责人接收',
   `revisions` int DEFAULT '0' COMMENT '改稿次数',
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   `update_time` datetime DEFAULT NULL COMMENT '更新时间',
@@ -209,6 +210,31 @@ CREATE TABLE `jiedan_payment` (
   KEY `idx_jiedan_payment_order` (`order_id`),
   KEY `idx_jiedan_payment_date` (`pay_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='收款流水';
+
+--
+-- Table structure for table `jiedan_approval`
+--
+
+DROP TABLE IF EXISTS `jiedan_approval`;
+CREATE TABLE `jiedan_approval` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '申请ID',
+  `order_id` bigint NOT NULL COMMENT '订单ID',
+  `type` varchar(16) NOT NULL COMMENT '申请类型 amount改报价 cancel取消 delete删除 payment收款',
+  `payload` varchar(1000) DEFAULT '' COMMENT '申请内容(JSON)，如 {"amount":"4500"}',
+  `reason` varchar(500) DEFAULT '' COMMENT '申请原因',
+  `status` varchar(12) NOT NULL DEFAULT 'pending' COMMENT 'pending待批 approved已批准 rejected已驳回 withdrawn已撤回',
+  `requester_id` bigint NOT NULL COMMENT '申请人账号id',
+  `requester_name` varchar(64) DEFAULT '' COMMENT '申请人姓名',
+  `create_time` datetime NOT NULL COMMENT '申请时间',
+  `handler_id` bigint DEFAULT NULL COMMENT '处理人账号id',
+  `handler_name` varchar(64) DEFAULT '' COMMENT '处理人姓名',
+  `handle_note` varchar(500) DEFAULT '' COMMENT '处理说明（驳回原因等）',
+  `handle_time` datetime DEFAULT NULL COMMENT '处理时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_approval_status` (`status`,`id`),
+  KEY `idx_jiedan_approval_order` (`order_id`,`status`),
+  KEY `idx_jiedan_approval_requester` (`requester_id`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='员工申请（需老板批准）';
 
 --
 -- Table structure for table `jiedan_audit_log`

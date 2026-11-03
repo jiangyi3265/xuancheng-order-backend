@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanApprovalMapper">
+
+    <resultMap id="JiedanApprovalResult" type="com.ruoyi.jiedan.domain.JiedanApproval">
+        <id     property="id"            column="id"             />
+        <result property="orderId"       column="order_id"       />
+        <result property="type"          column="type"           />
+        <result property="payload"       column="payload"        />
+        <result property="reason"        column="reason"         />
+        <result property="status"        column="status"         />
+        <result property="requesterId"   column="requester_id"   />
+        <result property="requesterName" column="requester_name" />
+        <result property="createTime"    column="create_time"    />
+        <result property="handlerId"     column="handler_id"     />
+        <result property="handlerName"   column="handler_name"   />
+        <result property="handleNote"    column="handle_note"    />
+        <result property="handleTime"    column="handle_time"    />
+    </resultMap>
+
+    <sql id="vo">
+        a.id as id,
+        a.order_id as orderId,
+        o.order_no as orderNo,
+        o.title as orderTitle,
+        o.amount as orderAmount,
+        o.owner_id as ownerId,
+        a.type as type,
+        a.payload as payload,
+        a.reason as reason,
+        a.status as status,
+        a.requester_id as requesterId,
+        a.requester_name as requesterName,
+        a.create_time as createTime,
+        a.handler_name as handlerName,
+        a.handle_note as handleNote,
+        a.handle_time as handleTime
+    </sql>
+
+    <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanApproval" useGeneratedKeys="true" keyProperty="id">
+        insert into jiedan_approval
+        (order_id, type, payload, reason, status, requester_id, requester_name, create_time)
+        values
+        (#{orderId}, #{type}, #{payload}, #{reason}, #{status}, #{requesterId}, #{requesterName}, #{createTime})
+    </insert>
+
+    <select id="selectById" parameterType="Long" resultMap="JiedanApprovalResult">
+        select id, order_id, type, payload, reason, status, requester_id, requester_name, create_time,
+               handler_id, handler_name, handle_note, handle_time
+        from jiedan_approval where id = #{id}
+    </select>
+
+    <select id="selectList" resultType="java.util.LinkedHashMap">
+        select <include refid="vo"/>
+        from jiedan_approval a
+        left join jiedan_order o on o.id = a.order_id
+        <where>
+            <if test="status != null and status != ''">and a.status = #{status}</if>
+            <if test="requesterId != null">and a.requester_id = #{requesterId}</if>
+        </where>
+        order by case when a.status = 'pending' then 0 else 1 end, a.id desc
+        limit #{limit}
+    </select>
+
+    <select id="countPending" resultType="int">
+        select count(*) from jiedan_approval
+        where order_id = #{orderId} and type = #{type} and status = 'pending'
+    </select>
+
+    <update id="markHandled">
+        update jiedan_approval
+        set status = #{status}, handler_id = #{handlerId}, handler_name = #{handlerName},
+            handle_note = #{note}, handle_time = #{time}
+        where id = #{id} and status = 'pending'
+    </update>
+
+    <delete id="deleteByOrderId" parameterType="Long">
+        delete from jiedan_approval where order_id = #{orderId}
+    </delete>
+
+</mapper>

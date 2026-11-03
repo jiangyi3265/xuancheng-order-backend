@@ -101,6 +101,38 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.income());
     }
 
+    /** 员工接收老板派来的项目。 */
+    @PostMapping("/{id}/accept")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult accept(@PathVariable Long id)
+    {
+        return AjaxResult.success(service.accept(id));
+    }
+
+    /** 员工拒绝刚派来的项目（必须写原因）。 */
+    @PostMapping("/{id}/reject")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult reject(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.reject(id, body == null ? null : (String) body.get("reason")));
+    }
+
+    /** 员工把项目交回老板（必须写原因）。 */
+    @PostMapping("/{id}/handback")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult handback(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.handback(id, body == null ? null : (String) body.get("reason")));
+    }
+
+    /** 老板验收不通过，退回返工（必须写原因）。 */
+    @PostMapping("/{id}/return")
+    @PreAuthorize("@ss.hasRole('admin')")
+    public AjaxResult returnForRework(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.returnForRework(id, body == null ? null : (String) body.get("reason")));
+    }
+
     /** 记一笔收款。 */
     @PostMapping("/{id}/payment")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")

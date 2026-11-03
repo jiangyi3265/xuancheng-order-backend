@@ -30,6 +30,7 @@ import com.ruoyi.jiedan.domain.JiedanPayment;
 import com.ruoyi.jiedan.domain.JiedanSetting;
 import com.ruoyi.jiedan.domain.JiedanTimeline;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
+import com.ruoyi.jiedan.mapper.JiedanApprovalMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugUpdateMapper;
 import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
@@ -59,6 +60,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanPaymentMapper paymentMapper;
+
+    @Autowired
+    private JiedanApprovalMapper approvalMapper;
 
     @Autowired
     private JiedanBugMapper bugMapper;
@@ -239,6 +243,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         Long by = access.currentUserId();
         Long owner = by;
+        boolean needAccept = false;
         if (access.isBoss())
         {
             Long requested = asLong(p.get("ownerId"));
@@ -246,11 +251,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             {
                 if (!access.isAssignable(requested)) throw new ServiceException("负责人无效或账号已停用");
                 owner = requested;
+                // 老板把项目直接建给员工：员工要先接收（或拒绝）
+                needAccept = !access.bossUserIds().contains(requested);
             }
         }
         String customerAccount = asStr(p.get("customerAccount"));
         access.requireBindableCustomer(customerAccount);
-        return insertOrder(p, owner, customerAccount, by, access.currentName());
+        return insertOrder(p, owner, customerAccount, by, access.currentName(), needAccept);
     }
 
     /** 客户端提交需求：自动落到该客户归属管理员的名下。 */
@@ -264,11 +271,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         q.put("status", "pending");
         if (strOr(asStr(q.get("customer")), null) == null) q.put("customer", account);
         String byName = strOr(asStr(q.get("byUserName")), "客户：" + account);
-        return insertOrder(q, owner, account, null, byName);
+        return insertOrder(q, owner, account, null, byName, false);
     }
 
     private Map<String, Object> insertOrder(Map<String, Object> p, Long ownerId, String customerAccount,
-                                            Long by, String byName)
+                                            Long by, String byName, boolean needAccept)
     {
         Date now = new Date();
         JiedanOrder o = new JiedanOrder();
@@ -287,6 +294,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         o.setUnread(join(othersThan(ownerId, by)));
         o.setPaid(0);
         o.setReceivedAmount(BigDecimal.ZERO);
+        o.setAssignState(needAccept ? "pending" : "");
         o.setRevisions(0);
         o.setCreateTime(now);
         o.setUpdateTime(now);
@@ -331,6 +339,20 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             o.setCustomerAccount(account);
         }
         if (p.containsKey("contact")) o.setContact(asStr(p.get("contact")));
+        if (!boss)
+        {
+            // 员工的敏感操作要先走申请：这里只放行“没变”的值（编辑窗口会把原值一起带回来）
+            if (p.containsKey("amount"))
+            {
+                BigDecimal curAmt = cur.getAmount() == null ? BigDecimal.ZERO : cur.getAmount();
+                if (asDecimal(p.get("amount")).compareTo(curAmt) != 0)
+                {
+                    throw new ServiceException("改报价要先提交申请，老板批准后才生效");
+                }
+            }
+            String wanted = p.containsKey("status") ? asStr(p.get("status")) : null;
+            if (wanted != null && !wanted.equals(cur.getStatus())) staffStatusGate(cur, wanted);
+        }
         if (p.containsKey("amount"))
         {
             o.setAmount(asDecimal(p.get("amount")));
@@ -348,6 +370,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 if (!access.isAssignable(requested)) throw new ServiceException("负责人无效或账号已停用");
                 o.setOwnerId(requested);
                 newOwner = requested;
+                // 派给员工：等 TA 接收或拒绝；转回老板自己名下：无需接收
+                o.setAssignState(access.bossUserIds().contains(requested) ? "" : "pending");
             }
         }
         if (p.containsKey("status") && asStr(p.get("status")) != null) o.setStatus(checkStatus(asStr(p.get("status"))));
@@ -363,7 +387,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         if (newOwner != null && !newOwner.equals(cur.getOwnerId()) && !newOwner.equals(by))
         {
-            pushService.pushToMember(newOwner, "📌 项目已派给你", cur.getTitle() + dash(cur.getCustomer()));
+            pushService.pushToMember(newOwner, "📌 项目已派给你，请接收或拒绝", cur.getTitle() + dash(cur.getCustomer()));
         }
         if (!changes.isEmpty())
         {
@@ -428,6 +452,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public void delete(Long id)
     {
+        if (!access.isBoss()) throw new ServiceException("删除项目要先提交申请，老板批准后才生效");
         JiedanOrder o = guard(id);
         Long by = access.currentUserId();
         String byName = access.currentName();
@@ -508,6 +533,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     /** 彻底删除一个项目及其所有留言、Bug、进度（不可恢复，只给回收站用）。 */
     private void doDelete(Long id)
     {
+        approvalMapper.deleteByOrderId(id);
         paymentMapper.deleteByOrderId(id);
         bugUpdateMapper.deleteByOrderId(id);
         bugMapper.deleteByOrderId(id);
@@ -705,6 +731,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         String status = checkStatus(asStr(p.get("status")));
+        if (!access.isBoss()) staffStatusGate(o, status);
         Date now = new Date();
 
         JiedanOrder upd = new JiedanOrder();
@@ -874,19 +901,20 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> addPayment(Long orderId, Map<String, Object> p)
     {
+        if (!access.isBoss()) throw new ServiceException("收款要先提交申请，老板确认后才入账");
+        return addPaymentAs(orderId, p, null);
+    }
+
+    /** 记收款；createdBy 为空表示当前登录人（老板批准员工的收款申请时，记在申请人名下）。 */
+    @Override
+    @Transactional
+    public Map<String, Object> addPaymentAs(Long orderId, Map<String, Object> p, String createdBy)
+    {
         JiedanOrder o = guard(orderId);
-        BigDecimal amount = parseMoney(p.get("amount"));
-        if (amount.signum() <= 0) throw new ServiceException("收款金额要大于 0");
-        if (amount.compareTo(PAYMENT_MAX) > 0) throw new ServiceException("收款金额太大，请检查是否多输了几位");
-
-        String payDate = strOr(asStr(p.get("payDate")), LocalDate.now().toString()).trim();
-        LocalDate day;
-        try { day = LocalDate.parse(payDate); }
-        catch (Exception e) { throw new ServiceException("收款日期格式不对，应为 年-月-日"); }
-        if (day.isAfter(LocalDate.now().plusDays(1))) throw new ServiceException("收款日期不能是将来的日期");
-
-        String note = strOr(asStr(p.get("note")), "").trim();
-        if (note.length() > 200) throw new ServiceException("备注最多 200 个字");
+        PaymentInput in = parsePayment(p);
+        BigDecimal amount = in.amount;
+        LocalDate day = in.day;
+        String note = in.note;
 
         Date now = new Date();
         JiedanPayment pay = new JiedanPayment();
@@ -894,7 +922,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         pay.setAmount(amount);
         pay.setPayDate(day.toString());
         pay.setNote(note);
-        pay.setCreatedBy(access.currentName());
+        pay.setCreatedBy(strOr(createdBy, access.currentName()));
         pay.setCreateTime(now);
         paymentMapper.insert(pay);
 
@@ -910,6 +938,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> deletePayment(Long paymentId)
     {
+        if (!access.isBoss()) throw new ServiceException("删除收款记录只有老板可以操作");
         JiedanPayment pay = paymentId == null ? null : paymentMapper.selectById(paymentId);
         if (pay == null) throw new ServiceException("这笔收款不存在");
         JiedanOrder o = guard(pay.getOrderId());
@@ -950,6 +979,42 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return vo;
     }
 
+    private static class PaymentInput
+    {
+        BigDecimal amount;
+        LocalDate day;
+        String note;
+    }
+
+    private PaymentInput parsePayment(Map<String, Object> p)
+    {
+        PaymentInput in = new PaymentInput();
+        in.amount = parseMoney(p.get("amount"));
+        if (in.amount.signum() <= 0) throw new ServiceException("收款金额要大于 0");
+        if (in.amount.compareTo(PAYMENT_MAX) > 0) throw new ServiceException("收款金额太大，请检查是否多输了几位");
+
+        String payDate = strOr(asStr(p.get("payDate")), LocalDate.now().toString()).trim();
+        try { in.day = LocalDate.parse(payDate); }
+        catch (Exception e) { throw new ServiceException("收款日期格式不对，应为 年-月-日"); }
+        if (in.day.isAfter(LocalDate.now().plusDays(1))) throw new ServiceException("收款日期不能是将来的日期");
+
+        in.note = strOr(asStr(p.get("note")), "").trim();
+        if (in.note.length() > 200) throw new ServiceException("备注最多 200 个字");
+        return in;
+    }
+
+    /** 校验并整理一笔收款的内容（金额 / 日期 / 备注），员工提交收款申请时用；通过后得到可以存起来的规范写法。 */
+    @Override
+    public Map<String, Object> normalizePaymentInput(Map<String, Object> p)
+    {
+        PaymentInput in = parsePayment(p);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("amount", in.amount.toPlainString());
+        out.put("payDate", in.day.toString());
+        out.put("note", in.note);
+        return out;
+    }
+
     /** 按流水重新算订单的已收金额和是否收清。 */
     private JiedanOrder syncReceived(JiedanOrder o, Date now)
     {
@@ -988,6 +1053,160 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         if (status == null || !STATUS_LABELS.containsKey(status)) throw new ServiceException("项目状态不正确");
         return status;
+    }
+
+    // ================= 流转：接收 / 拒绝 / 交回 / 退回返工 =================
+    private String requireReason(String reason)
+    {
+        String why = strOr(reason, "").trim();
+        if (why.isEmpty()) throw new ServiceException("请写一下原因");
+        if (why.length() > 500) throw new ServiceException("原因最多 500 个字");
+        return why;
+    }
+
+    /** 员工必须先接收老板派来的项目，才能继续操作。 */
+    private void requireAccepted(JiedanOrder o)
+    {
+        if ("pending".equals(o.getAssignState()))
+        {
+            throw new ServiceException("老板刚把这个项目派给你，请先点“接收”（或“拒绝”）再继续");
+        }
+    }
+
+    /** 员工改状态的规则：要先接收；不能自己标“已完成”（走“提交验收”）、不能自己取消（走申请）。 */
+    private void staffStatusGate(JiedanOrder o, String status)
+    {
+        requireAccepted(o);
+        if ("done".equals(status)) throw new ServiceException("请点“提交验收”，由老板验收后才算完成");
+        if ("cancelled".equals(status)) throw new ServiceException("取消项目要先提交申请，老板批准后才生效");
+    }
+
+    /** 员工接收老板派来的项目。 */
+    @Override
+    @Transactional
+    public Map<String, Object> accept(Long id)
+    {
+        JiedanOrder o = guard(id);
+        if (access.isBoss() || !"pending".equals(o.getAssignState())) throw new ServiceException("这个项目不需要接收");
+        Long me = access.currentUserId();
+        String name = access.currentName();
+        Date now = new Date();
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(id);
+        upd.setAssignState("");
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+        addTimeline(id, name, "note", name + " 接收了这个项目", null, now);
+        touchUnread(o, me, now);
+        audit.record("order.accept", "order", id, o.getTitle(), "接收了老板派来的项目");
+        pushRecipients(o, me, "✅ 已接收", o.getTitle() + "（" + name + "）");
+        return voOf(id);
+    }
+
+    /** 员工拒绝刚派来的项目：回到老板名下，必须写原因。 */
+    @Override
+    @Transactional
+    public Map<String, Object> reject(Long id, String reason)
+    {
+        JiedanOrder o = guard(id);
+        if (access.isBoss() || !"pending".equals(o.getAssignState()))
+        {
+            throw new ServiceException("只有刚派给你、还没接收的项目才能拒绝");
+        }
+        return giveBack(o, reason, "order.reject", "拒绝了老板派来的项目", "🙅 已拒绝");
+    }
+
+    /** 员工把做到一半的项目交回老板：回到老板名下并变成“待确认”，必须写原因。 */
+    @Override
+    @Transactional
+    public Map<String, Object> handback(Long id, String reason)
+    {
+        JiedanOrder o = guard(id);
+        if (access.isBoss()) throw new ServiceException("这是你自己名下的项目，不需要交回");
+        if ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus()))
+        {
+            throw new ServiceException("已完成或已取消的项目不能交回");
+        }
+        return giveBack(o, reason, "order.handback", "把项目交回给老板", "↩️ 已交回");
+    }
+
+    private Map<String, Object> giveBack(JiedanOrder o, String reason, String action, String verb, String pushTitle)
+    {
+        String why = requireReason(reason);
+        List<Long> bosses = access.bossUserIds();
+        if (bosses.isEmpty()) throw new ServiceException("找不到老板账号，请联系管理员");
+        Long boss = bosses.get(0);
+        Long me = access.currentUserId();
+        String name = access.currentName();
+        Date now = new Date();
+
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(o.getId());
+        upd.setOwnerId(boss);
+        upd.setStatus("pending");
+        upd.setAssignState("");
+        upd.setUnread(join(othersThan(boss, me)));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+
+        addTimeline(o.getId(), name, "note", name + " " + verb + "：" + why, null, now);
+        audit.record(action, "order", o.getId(), o.getTitle(), "原因：" + why);
+        for (Long m : othersThan(boss, me))
+        {
+            pushService.pushToMember(m, pushTitle, o.getTitle() + "（" + name + "）：" + why);
+        }
+        // 交回之后员工就看不到这个项目了，只回一个最小的结果
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", o.getId());
+        vo.put("ownerId", boss);
+        vo.put("status", "pending");
+        return vo;
+    }
+
+    /** 老板验收不通过：退回给负责人返工（项目回到“进行中”，改稿次数 +1），必须写原因。 */
+    @Override
+    @Transactional
+    public Map<String, Object> returnForRework(Long id, String reason)
+    {
+        access.requireBoss();
+        JiedanOrder o = guard(id);
+        if (!"review".equals(o.getStatus()) && !"done".equals(o.getStatus()))
+        {
+            throw new ServiceException("只有“待验收”或“已完成”的项目可以退回返工");
+        }
+        String why = requireReason(reason);
+        Long me = access.currentUserId();
+        String name = access.currentName();
+        Date now = new Date();
+
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(id);
+        upd.setStatus("doing");
+        upd.setRevisions((o.getRevisions() == null ? 0 : o.getRevisions()) + 1);
+        upd.setUnread(join(othersThan(o.getOwnerId(), me)));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+
+        addTimeline(id, name, "note", name + " 退回返工：" + why, null, now);
+        audit.record("order.return", "order", id, o.getTitle(), "原因：" + why + "；改稿次数 +1");
+        pushRecipients(o, me, "🔁 退回返工", o.getTitle() + "：" + why);
+        return voOf(id);
+    }
+
+    /**
+     * 给申请流程用：在项目时间线里记一笔、把项目标成相关人未读并推送。
+     * 项目已在回收站里也照样记（比如删除申请被批准之后）。
+     */
+    @Override
+    public void flowEvent(Long orderId, String text, String pushTitle, String pushBody)
+    {
+        JiedanOrder o = orderMapper.selectByIdAny(orderId);
+        if (o == null) return;
+        Long by = access.currentUserId();
+        Date now = new Date();
+        addTimeline(orderId, access.currentName(), "note", text, null, now);
+        touchUnread(o, by, now);
+        if (pushTitle != null) pushRecipients(o, by, pushTitle, pushBody);
     }
 
     // ================= 内部辅助 =================
@@ -1147,6 +1366,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         {
             // 收款明细属于内部账目，客户看不到
             vo.put("receivedAmount", o.getReceivedAmount() == null ? BigDecimal.ZERO : o.getReceivedAmount());
+            vo.put("assignState", strOr(o.getAssignState(), ""));
             List<Map<String, Object>> payments = new ArrayList<>();
             for (JiedanPayment pay : paymentMapper.selectByOrderId(o.getId()))
             {
@@ -1255,6 +1475,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Map<String, Object> vo = toListSummaryVO(row);
         vo.put("contact", row.get("contact"));
         vo.put("receivedAmount", asDecimal(row.get("receivedAmount")));
+        vo.put("assignState", strOr(asStr(row.get("assignState")), ""));
+        vo.put("pendingApprovals", row.get("pendingApprovals") == null ? 0 : row.get("pendingApprovals"));
         vo.put("unread", parseUnread(asStr(row.get("unread"))));
         vo.put("attachmentCount", row.get("attachmentCount") == null ? 0 : row.get("attachmentCount"));
         vo.put("bugCount", row.get("bugCount") == null ? 0 : row.get("bugCount"));

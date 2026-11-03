@@ -20,6 +20,27 @@ public interface IJiedanOrderService
     /** 记一笔收款（金额 / 日期 / 备注），返回更新后的项目详情 */
     Map<String, Object> addPayment(Long orderId, Map<String, Object> payload);
 
+    /** 记收款；createdBy 为空表示当前登录人（批准员工的收款申请时记在申请人名下） */
+    Map<String, Object> addPaymentAs(Long orderId, Map<String, Object> payload, String createdBy);
+
+    /** 校验并整理一笔收款的内容，返回可存储的规范写法；不合法抛 ServiceException */
+    Map<String, Object> normalizePaymentInput(Map<String, Object> payload);
+
+    /** 员工接收老板派来的项目 */
+    Map<String, Object> accept(Long id);
+
+    /** 员工拒绝刚派来的项目（必须写原因），项目回到老板名下 */
+    Map<String, Object> reject(Long id, String reason);
+
+    /** 员工把项目交回老板（必须写原因），项目回到老板名下并变成待确认 */
+    Map<String, Object> handback(Long id, String reason);
+
+    /** 老板验收不通过：退回返工（必须写原因），回到进行中、改稿 +1 */
+    Map<String, Object> returnForRework(Long id, String reason);
+
+    /** 给申请流程用：记时间线、标未读、推送 */
+    void flowEvent(Long orderId, String text, String pushTitle, String pushBody);
+
     /** 删除一笔收款，返回更新后的项目详情 */
     Map<String, Object> deletePayment(Long paymentId);
 

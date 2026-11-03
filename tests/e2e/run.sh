@@ -111,7 +111,7 @@ data_fingerprint() {
 if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
   # 升级演练：旧版库（线上现状）+ 旧版数据 -> 按上线清单的顺序执行两个升级脚本 -> 再跑全部测试
   [ -f "$E2E_OLD_SCHEMA_SQL" ] || die "找不到旧版建库脚本：$E2E_OLD_SCHEMA_SQL"
-  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1 -> upgrade_solo_v1"
+  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1 -> upgrade_solo_v1 -> upgrade_approval_v1"
   new_db "$DB"
   mysql_db "$DB" < "$E2E_OLD_SCHEMA_SQL" || die "导入旧版建库脚本失败"
   mysql_db "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
@@ -122,8 +122,9 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     mysql_db "$DB" < "$ROOT/deploy/upgrade_permission_v1.sql" || die "upgrade_permission_v1.sql 第 $round 次执行失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_hardening_v1.sql" || die "upgrade_hardening_v1.sql 第 $round 次执行失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_solo_v1.sql" || die "upgrade_solo_v1.sql 第 $round 次执行失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_approval_v1.sql" || die "upgrade_approval_v1.sql 第 $round 次执行失败"
   done
-  echo "   三个升级脚本各执行两遍（含幂等性）：成功"
+  echo "   四个升级脚本各执行两遍（含幂等性）：成功"
   AFTER="$(data_fingerprint)"
   if [ "$BEFORE" != "$AFTER" ]; then
     echo "错误：升级脚本改动了已有业务数据" >&2
@@ -138,6 +139,12 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     exit 4
   fi
   echo "   旧版标记过已收款的订单，升级后补录了整笔收款流水(仅 1 条、重复执行不会重复补)；其余订单未受影响"
+  FLOWCHK="$(mysql_db -N -B "$DB" -e "select (select count(*) from jiedan_order where assign_state <> ''), (select count(*) from jiedan_approval), (select count(*) from jiedan_order)")"
+  if [ "$FLOWCHK" != "$(printf '0	0	4')" ]; then
+    echo "错误：升级后旧项目的接收状态或申请表不对（期望：没有等接收的项目、申请表为空、旧项目 4 个），实际：$FLOWCHK" >&2
+    exit 4
+  fi
+  echo "   旧项目升级后都是“无需接收”，申请表为空"
   # 与全新安装的结构逐项比对，防止“升级出来的库”和“新装的库”悄悄不一样
   DB_REF="${DB}_ref"
   new_db "$DB_REF"
@@ -180,7 +187,7 @@ fi
 
 export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER"
 RC=0
-for t in permission hardening solo; do
+for t in permission hardening solo flow; do
   echo
   echo "################ $t.test.mjs ################"
   node "$HERE/$t.test.mjs" || RC=1

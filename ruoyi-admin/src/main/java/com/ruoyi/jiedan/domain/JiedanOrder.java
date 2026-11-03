@@ -34,6 +34,8 @@ public class JiedanOrder
     private Integer paid;
     /** 已收金额 = 收款流水合计 */
     private BigDecimal receivedAmount;
+    /** 接收状态：空=无需接收/已接收；pending=老板刚派过来，等负责人接收或拒绝 */
+    private String assignState;
     private Integer revisions;
     /** 数据版本，每次项目内容变化自动递增，用于轻量实时同步 */
     private Long version;
@@ -84,6 +86,8 @@ public class JiedanOrder
     public void setPaid(Integer paid) { this.paid = paid; }
     public BigDecimal getReceivedAmount() { return receivedAmount; }
     public void setReceivedAmount(BigDecimal receivedAmount) { this.receivedAmount = receivedAmount; }
+    public String getAssignState() { return assignState; }
+    public void setAssignState(String assignState) { this.assignState = assignState; }
     public Integer getRevisions() { return revisions; }
     public void setRevisions(Integer revisions) { this.revisions = revisions; }
     public Long getVersion() { return version; }

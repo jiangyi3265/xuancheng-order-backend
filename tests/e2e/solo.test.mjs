@@ -128,8 +128,10 @@ ok('下属不能给总管理员的项目记收款', denied(await pay(t1, oB, { a
 const bossPay = (await detail(boss, oB)).payments[0].id
 ok('下属不能删总管理员项目的收款', denied(await call(t1, 'DELETE', '/jiedan/order/payment/' + bossPay)))
 ok('被拒后收款流水没变', (await detail(boss, oB)).payments.length === 2)
-r = await pay(t1, oS, { amount: 200, payDate: D_THIS, note: '下属收的' })
-ok('下属能给自己的项目记收款', good(r) && num(r.data.receivedAmount) === 200)
+ok('下属不能直接记收款（要先提交申请）', denied(await pay(t1, oS, { amount: 200, payDate: D_THIS, note: '下属收的' })))
+r = await call(t1, 'POST', '/jiedan/approval', { orderId: oS, type: 'payment', reason: '客户转账给我了', payload: { amount: 200, payDate: D_THIS, note: '下属收的' } })
+ok('下属提交收款申请', good(r), JSON.stringify(r))
+ok('老板批准后入账', good(await call(boss, 'POST', `/jiedan/approval/${r.data.id}/approve`)) && num((await detail(boss, oS)).receivedAmount) === 200)
 ok('总管理员也能给下属的项目记收款', good(await pay(boss, oS, { amount: 100, payDate: D_PREV })))
 ok('下属的详情能看到收款明细', (await detail(t1, oS)).payments.length === 2)
 ok('客户不能记收款', denied(await pay(c1, oC, { amount: 10 })))
@@ -163,9 +165,9 @@ ok('6 个月以前的收款计入累计、不计入逐月', num(incOld.total) ==
 const oldId = (await detail(boss, oB)).payments.find((x) => x.note === '很久以前').id
 await call(boss, 'DELETE', '/jiedan/order/payment/' + oldId)
 
-await call(t1, 'DELETE', '/jiedan/order/' + oS)
+await call(boss, 'DELETE', '/jiedan/order/' + oS)
 ok('下属的项目进回收站后，不再计入统计', num((await call(boss, 'GET', '/jiedan/order/income')).data.total) === num(base.total) + 1420 - 300)
-await call(t1, 'PUT', `/jiedan/order/${oS}/restore`)
+await call(boss, 'PUT', `/jiedan/order/${oS}/restore`)
 ok('恢复后收款流水还在，统计恢复', num((await call(boss, 'GET', '/jiedan/order/income')).data.total) === num(base.total) + 1420)
 
 await call(boss, 'PUT', '/jiedan/order/status', { id: oC, status: 'cancelled' })
@@ -210,7 +212,7 @@ await call(boss, 'DELETE', '/jiedan/order/payment/' + (await detail(boss, oB)).p
 section('I 操作日志与彻底删除')
 const addRows = await auditRows(boss, '&action=payment.add')
 ok('记收款留痕：金额/日期/备注/累计', has(addRows, (x) => x.targetId === oB && /收款 .*300/.test(x.detail) && /定金/.test(x.detail) && /累计已收/.test(x.detail)), JSON.stringify(addRows[0]))
-ok('下属记收款留痕为下属操作', has(addRows, (x) => x.targetId === oS && x.actorRole === 'employee' && x.actorName === '小林'))
+ok('批准下属的收款申请也留痕', has(addRows, (x) => x.targetId === oS && /200/.test(x.detail)))
 ok('删除收款留痕', has(await auditRows(boss, '&action=payment.delete'), (x) => x.targetId === oB && /删除一笔收款/.test(x.detail)))
 
 r = await call(boss, 'POST', '/jiedan/order', { title: 'S-待彻底删除', amount: 50 })
