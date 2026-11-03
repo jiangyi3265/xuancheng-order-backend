@@ -12,9 +12,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
+import com.ruoyi.jiedan.service.JiedanDigestService;
 
 /**
- * 推送设置 / 测试 / 手动提醒。
+ * 推送设置 / 测试 / 手动提醒 / 每日汇总预览。
  */
 @RestController
 @RequestMapping("/jiedan/push")
@@ -23,6 +24,9 @@ public class JiedanPushController
 {
     @Autowired
     private IJiedanOrderService service;
+
+    @Autowired
+    private JiedanDigestService digestService;
 
     @GetMapping("/config")
     public AjaxResult config()
@@ -50,5 +54,13 @@ public class JiedanPushController
     public AjaxResult reminder()
     {
         return AjaxResult.success("已推送 " + service.runDeadlineReminder() + " 条提醒");
+    }
+
+    /** 预览今天 9:05 会推送的每日汇总（只看不发，不改任何数据）：仅总管理员 */
+    @GetMapping("/digest")
+    @PreAuthorize("@ss.hasRole('admin')")
+    public AjaxResult digest()
+    {
+        return AjaxResult.success(digestService.build());
     }
 }
