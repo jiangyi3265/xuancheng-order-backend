@@ -36,6 +36,12 @@ public class JiedanOrder
     private Long version;
     private Date createTime;
     private Date updateTime;
+    /** 0 正常 1 已删除（回收站） */
+    private Integer delFlag;
+    private Date deleteTime;
+    private String deleteBy;
+    /** 删除人账号 id，客户自己删除时为空 */
+    private Long deleteById;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -81,4 +87,12 @@ public class JiedanOrder
     public void setCreateTime(Date createTime) { this.createTime = createTime; }
     public Date getUpdateTime() { return updateTime; }
     public void setUpdateTime(Date updateTime) { this.updateTime = updateTime; }
+    public Integer getDelFlag() { return delFlag; }
+    public void setDelFlag(Integer delFlag) { this.delFlag = delFlag; }
+    public Date getDeleteTime() { return deleteTime; }
+    public void setDeleteTime(Date deleteTime) { this.deleteTime = deleteTime; }
+    public String getDeleteBy() { return deleteBy; }
+    public void setDeleteBy(String deleteBy) { this.deleteBy = deleteBy; }
+    public Long getDeleteById() { return deleteById; }
+    public void setDeleteById(Long deleteById) { this.deleteById = deleteById; }
 }

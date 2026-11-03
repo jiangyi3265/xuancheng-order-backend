@@ -56,10 +56,11 @@ spring:
   # 文件上传
   servlet:
     multipart:
-      # 单个文件大小
-      max-file-size: 10MB
+      # 单个文件大小：与附件代码里的 50MB 上限、Nginx 的 client_max_body_size 保持一致，
+      # 否则视频等大附件会在这里被拦下
+      max-file-size: 50MB
       # 设置总上传的文件大小
-      max-request-size: 20MB
+      max-request-size: 55MB
   # 服务模块
   devtools:
     restart:

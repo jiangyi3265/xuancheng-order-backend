@@ -1,6 +1,14 @@
 package com.ruoyi.jiedan.controller;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+
+import javax.servlet.http.HttpServletResponse;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -11,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.ruoyi.common.core.controller.BaseController;
@@ -18,6 +27,8 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
+import com.ruoyi.jiedan.service.JiedanAuditService;
+import com.ruoyi.jiedan.service.JiedanOrderExporter;
 
 /**
  * 接单订单 Controller。
@@ -30,11 +41,81 @@ public class JiedanOrderController extends BaseController
     @Autowired
     private IJiedanOrderService service;
 
+    @Autowired
+    private JiedanOrderExporter exporter;
+
+    @Autowired
+    private JiedanAuditService audit;
+
+    /** 把导出条件整理成一句人话，写进操作日志。 */
+    private String describe(Map<String, String> params)
+    {
+        List<String> parts = new ArrayList<>();
+        for (Map.Entry<String, String> e : params.entrySet())
+        {
+            if (StringUtils.isNotEmpty(e.getValue())) parts.add(e.getKey() + "=" + e.getValue());
+        }
+        return parts.isEmpty() ? "（无筛选条件）" : "（条件：" + String.join("，", parts) + "）";
+    }
+
     @GetMapping("/list")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult list()
     {
         return AjaxResult.success(service.listVO());
+    }
+
+    /** 变更戳：后台每 10 秒问一次，戳没变就不用重新拉整个列表。 */
+    @GetMapping("/stamp")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult stamp()
+    {
+        // 注意不能直接 success(String)：那个重载会把字符串当成提示语 msg，而不是 data
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("stamp", service.stamp());
+        return AjaxResult.success(vo);
+    }
+
+    /** 导出 Excel：条件与列表页筛选一致；只会导出当前登录人有权看到的项目，并记入操作日志。 */
+    @GetMapping("/export")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public void export(@RequestParam Map<String, String> params, HttpServletResponse response) throws IOException
+    {
+        List<Map<String, Object>> rows = service.listFiltered(params);
+        byte[] bytes = exporter.build(rows);
+        audit.record("order.export", "order", null, "订单导出", "导出 " + rows.size() + " 条" + describe(params));
+
+        String name = URLEncoder.encode("接单列表_" + LocalDate.now() + ".xlsx", "UTF-8").replace("+", "%20");
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + name);
+        response.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+        response.setContentLength(bytes.length);
+        response.getOutputStream().write(bytes);
+    }
+
+    /** 回收站：总管理员看全部，下属管理员只看自己名下。 */
+    @GetMapping("/trash")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult trash()
+    {
+        return AjaxResult.success(service.listTrash());
+    }
+
+    @PutMapping("/{id}/restore")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult restore(@PathVariable Long id)
+    {
+        service.restore(id);
+        return AjaxResult.success();
+    }
+
+    /** 彻底删除：仅总管理员，且只能删回收站里的项目。 */
+    @DeleteMapping("/{id}/purge")
+    @PreAuthorize("@ss.hasRole('admin')")
+    public AjaxResult purge(@PathVariable Long id)
+    {
+        service.purge(id);
+        return AjaxResult.success();
     }
 
     @GetMapping("/{id}")

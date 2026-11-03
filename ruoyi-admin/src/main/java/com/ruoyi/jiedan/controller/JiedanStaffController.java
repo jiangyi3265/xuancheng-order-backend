@@ -27,6 +27,7 @@ import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.service.JiedanAccess;
+import com.ruoyi.jiedan.service.JiedanAuditService;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
@@ -47,6 +48,9 @@ public class JiedanStaffController extends BaseController
 
     @Autowired
     private RedisCache redisCache;
+
+    @Autowired
+    private JiedanAuditService audit;
 
     /** 当前登录人的身份（前端据此显示角色、隐藏无权限的菜单）。 */
     @GetMapping("/me")
@@ -122,6 +126,7 @@ public class JiedanStaffController extends BaseController
         user.setRoleIds(new Long[] { roleId });
         userService.insertUser(user);
         accountMapper.upsertOwner(user.getUserId(), access.currentUserId());
+        audit.record("staff.create", "staff", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建下属管理员账号");
         return AjaxResult.success("下属管理员创建成功");
     }
 
@@ -138,6 +143,7 @@ public class JiedanStaffController extends BaseController
         if (user == null) return AjaxResult.error("不是下属管理员账号，禁止操作");
         int rows = userService.resetUserPwd(userId, SecurityUtils.encryptPassword(password));
         kick(user.getUserName());
+        audit.record("staff.reset", "staff", userId, user.getUserName() + "（" + user.getNickName() + "）", "重置了登录密码，并让其已登录设备下线");
         return toAjax(rows);
     }
 
@@ -158,6 +164,7 @@ public class JiedanStaffController extends BaseController
         upd.setUpdateBy(SecurityUtils.getUsername());
         int rows = userService.updateUserStatus(upd);
         if ("1".equals(status)) kick(user.getUserName());
+        audit.record("staff.status", "staff", userId, user.getUserName() + "（" + user.getNickName() + "）", "1".equals(status) ? "停用账号" : "启用账号");
         return toAjax(rows);
     }
 
@@ -175,6 +182,7 @@ public class JiedanStaffController extends BaseController
         kick(user.getUserName());
         accountMapper.deleteOwner(userId);
         userService.deleteUserById(userId);
+        audit.record("staff.delete", "staff", userId, user.getUserName() + "（" + user.getNickName() + "）", "删除下属管理员账号");
         return AjaxResult.success("已删除账号");
     }
 

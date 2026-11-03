@@ -11,6 +11,21 @@ public interface IJiedanOrderService
 
     Map<String, Object> getVersion(Long id);
 
+    /** 变更戳：我能看到的项目只要有任何增删改，它就会变；后台用它决定要不要重新拉列表 */
+    String stamp();
+
+    /** 在“我能看到的项目”里按条件筛选（关键字/渠道/负责人/状态/收款/逾期/日期），导出用 */
+    List<Map<String, Object>> listFiltered(Map<String, String> filters);
+
+    /** 回收站列表：总管理员看全部，下属管理员只看自己名下 */
+    List<Map<String, Object>> listTrash();
+
+    /** 从回收站恢复 */
+    void restore(Long id);
+
+    /** 彻底删除回收站里的项目（仅总管理员） */
+    void purge(Long id);
+
     /** 客户门户：列出某客户账号名下的项目 */
     List<Map<String, Object>> listByCustomer(String account);
 
@@ -31,8 +46,10 @@ public interface IJiedanOrderService
 
     Map<String, Object> update(Map<String, Object> payload);
 
+    /** 删除 = 放进回收站，可恢复 */
     void delete(Long id);
 
+    /** 客户撤回自己提交的问题：仅限还在“待确认”的项目，其余抛 ServiceException；不存在/不是本人的返回 false */
     boolean deleteForCustomer(Long id, String account);
 
     Map<String, Object> createBug(Map<String, Object> payload);

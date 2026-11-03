@@ -20,11 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 import com.alibaba.fastjson2.JSON;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.SecurityUtils;
+import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.domain.JiedanBug;
 import com.ruoyi.jiedan.domain.JiedanBugUpdate;
 import com.ruoyi.jiedan.domain.JiedanOrder;
 import com.ruoyi.jiedan.domain.JiedanSetting;
 import com.ruoyi.jiedan.domain.JiedanTimeline;
+import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugUpdateMapper;
 import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
@@ -33,6 +35,7 @@ import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
 import com.ruoyi.jiedan.service.JiedanAccess;
 import com.ruoyi.jiedan.service.JiedanAttachmentStorage;
+import com.ruoyi.jiedan.service.JiedanAuditService;
 import com.ruoyi.jiedan.service.JiedanPushService;
 
 /**
@@ -67,6 +70,19 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanAccess access;
+
+    @Autowired
+    private JiedanAuditService audit;
+
+    @Autowired
+    private JiedanAccountMapper accountMapper;
+
+    private static final Map<String, String> PRIORITY_LABELS = new LinkedHashMap<String, String>()
+    {{
+        put("high", "高");
+        put("medium", "中");
+        put("low", "低");
+    }};
 
     private static final Map<String, String> LEGACY_MEMBER_NAMES = new LinkedHashMap<String, String>()
     {{
@@ -105,6 +121,58 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     public Map<String, Object> getVersion(Long id)
     {
         return versionVO(id, orderMapper.selectVersionScoped(id, access.ownerScope()));
+    }
+
+    @Override
+    public String stamp()
+    {
+        return orderMapper.selectStamp(access.ownerScope());
+    }
+
+    /** 列表筛选（导出用）：在“我能看到的项目”里按条件过滤，条件与后台列表页的筛选一致。 */
+    @Override
+    public List<Map<String, Object>> listFiltered(Map<String, String> q)
+    {
+        String keyword = strOr(q.get("keyword"), "").trim().toLowerCase();
+        String channel = strOr(q.get("channel"), "");
+        String status = strOr(q.get("status"), "");
+        Long ownerId = asLong(q.get("ownerId"));
+        String paid = strOr(q.get("paid"), "");
+        boolean overdueOnly = "1".equals(q.get("overdue"));
+        String createFrom = strOr(q.get("createFrom"), "");
+        String createTo = strOr(q.get("createTo"), "");
+        String deadlineFrom = strOr(q.get("deadlineFrom"), "");
+        String deadlineTo = strOr(q.get("deadlineTo"), "");
+        String today = LocalDate.now().toString();
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> vo : listVO())
+        {
+            String st = asStr(vo.get("status"));
+            String dl = strOr(asStr(vo.get("deadline")), "");
+            String created = strOr(asStr(vo.get("createTime")), "");
+            String createDay = created.length() >= 10 ? created.substring(0, 10) : created;
+
+            if (!channel.isEmpty() && !channel.equals(asStr(vo.get("channel")))) continue;
+            if (!status.isEmpty() && !status.equals(st)) continue;
+            if (ownerId != null && !ownerId.equals(asLong(vo.get("ownerId")))) continue;
+            if ("1".equals(paid) && !asBool(vo.get("paid"))) continue;
+            if ("0".equals(paid) && asBool(vo.get("paid"))) continue;
+            if (overdueOnly && !(Arrays.asList("pending", "doing", "review").contains(st)
+                    && !dl.isEmpty() && dl.compareTo(today) < 0)) continue;
+            if (!createFrom.isEmpty() && createDay.compareTo(createFrom) < 0) continue;
+            if (!createTo.isEmpty() && createDay.compareTo(createTo) > 0) continue;
+            if (!deadlineFrom.isEmpty() && (dl.isEmpty() || dl.compareTo(deadlineFrom) < 0)) continue;
+            if (!deadlineTo.isEmpty() && (dl.isEmpty() || dl.compareTo(deadlineTo) > 0)) continue;
+            if (!keyword.isEmpty())
+            {
+                String hay = (strOr(asStr(vo.get("title")), "") + " " + strOr(asStr(vo.get("customer")), "")
+                        + " " + strOr(asStr(vo.get("orderNo")), "")).toLowerCase();
+                if (!hay.contains(keyword)) continue;
+            }
+            result.add(vo);
+        }
+        return result;
     }
 
     // ---------- 客户门户：仅限本人项目 ----------
@@ -217,6 +285,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         addTimeline(o.getId(), byName, "create", "创建订单", null, now);
         pushRecipients(o, by, "🆕 新单待接", o.getTitle() + dash(o.getCustomer()) + "（来自 " + byName + "）");
+
+        String amountText = o.getAmount() != null && o.getAmount().signum() > 0 ? "；金额：" + money(o.getAmount()) : "";
+        audit.record("order.create", "order", o.getId(), o.getTitle(),
+                (by == null ? "客户端提交" : "后台建单") + "；负责人：" + ownerName(ownerId) + amountText);
         return voOf(o.getId());
     }
 
@@ -266,34 +338,154 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (p.containsKey("paid")) o.setPaid(asBool(p.get("paid")) ? 1 : 0);
         o.setUnread(join(othersThan(newOwner, by)));
         o.setUpdateTime(new Date());
+        List<String> changes = describeChanges(cur, o);
         orderMapper.update(o);
 
         if (newOwner != null && !newOwner.equals(cur.getOwnerId()) && !newOwner.equals(by))
         {
             pushService.pushToMember(newOwner, "📌 项目已派给你", cur.getTitle() + dash(cur.getCustomer()));
         }
+        if (!changes.isEmpty())
+        {
+            audit.record("order.update", "order", id, cur.getTitle(), String.join("；", changes));
+        }
         return voOf(id);
     }
 
-    // ---------- 删除 ----------
+    /** 把这次修改里“值得留痕”的字段整理成人话：旧值 → 新值。 */
+    private List<String> describeChanges(JiedanOrder cur, JiedanOrder next)
+    {
+        List<String> out = new ArrayList<>();
+        diffText(out, "项目名", cur.getTitle(), next.getTitle());
+        diffText(out, "客户", cur.getCustomer(), next.getCustomer());
+        diffText(out, "客户账号", cur.getCustomerAccount(), next.getCustomerAccount());
+        if (next.getAmount() != null
+                && (cur.getAmount() == null || cur.getAmount().compareTo(next.getAmount()) != 0))
+        {
+            out.add("金额 " + money(cur.getAmount()) + " → " + money(next.getAmount()));
+        }
+        if (next.getOwnerId() != null && !next.getOwnerId().equals(cur.getOwnerId()))
+        {
+            out.add("负责人 " + ownerName(cur.getOwnerId()) + " → " + ownerName(next.getOwnerId()));
+        }
+        if (next.getStatus() != null && !next.getStatus().equals(cur.getStatus()))
+        {
+            out.add("状态 " + STATUS_LABELS.getOrDefault(cur.getStatus(), strOr(cur.getStatus(), "无"))
+                    + " → " + STATUS_LABELS.getOrDefault(next.getStatus(), next.getStatus()));
+        }
+        if (next.getPriority() != null && !next.getPriority().equals(cur.getPriority()))
+        {
+            out.add("优先级 " + PRIORITY_LABELS.getOrDefault(cur.getPriority(), strOr(cur.getPriority(), "无"))
+                    + " → " + PRIORITY_LABELS.getOrDefault(next.getPriority(), next.getPriority()));
+        }
+        if (next.getDeadline() != null
+                && !strOr(next.getDeadline(), "").equals(strOr(cur.getDeadline(), "")))
+        {
+            out.add("截止 " + strOr(cur.getDeadline(), "无") + " → " + strOr(next.getDeadline(), "无"));
+        }
+        if (next.getPaid() != null && !next.getPaid().equals(cur.getPaid() == null ? 0 : cur.getPaid()))
+        {
+            out.add("收款 " + (cur.getPaid() != null && cur.getPaid() == 1 ? "已收款" : "未收款")
+                    + " → " + (next.getPaid() == 1 ? "已收款" : "未收款"));
+        }
+        if (next.getRequirement() != null && !strOr(next.getRequirement(), "").equals(strOr(cur.getRequirement(), "")))
+        {
+            out.add("需求说明已修改");
+        }
+        return out;
+    }
+
+    private void diffText(List<String> out, String label, String before, String after)
+    {
+        if (after != null && !after.equals(strOr(before, "")))
+        {
+            out.add(label + " " + strOr(before, "无") + " → " + strOr(after, "无"));
+        }
+    }
+
+    // ---------- 删除：放进回收站，可恢复 ----------
     @Override
     @Transactional
     public void delete(Long id)
     {
-        guard(id);
-        doDelete(id);
+        JiedanOrder o = guard(id);
+        Long by = access.currentUserId();
+        String byName = access.currentName();
+        orderMapper.softDelete(id, byName, by, new Date());
+        audit.record("order.delete", "order", id, o.getTitle(), "移入回收站");
+        pushRecipients(o, by, "🗑 项目已删除", o.getTitle() + dash(o.getCustomer()) + "（" + byName + "，可在回收站恢复）");
     }
 
+    /**
+     * 客户只能撤回还没开始处理的问题（待确认）；一旦团队已经接手，就不能自行删除，
+     * 避免聊天记录、Bug 和内部记事本被客户一键清空。删除同样进回收站，团队可恢复。
+     */
     @Override
     @Transactional
     public boolean deleteForCustomer(Long id, String account)
     {
         JiedanOrder o = orderMapper.selectById(id);
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return false;
-        doDelete(id);
+        if (!"pending".equals(o.getStatus()))
+        {
+            throw new ServiceException("该项目已在处理中，不能自行删除，如需撤销请在项目里留言联系我们");
+        }
+        String byName = "客户：" + access.currentName();
+        orderMapper.softDelete(id, byName, null, new Date());
+        audit.record("order.delete", "order", id, o.getTitle(), "客户撤回（移入回收站）");
+        pushRecipients(o, null, "🗑 客户撤回了项目", o.getTitle() + dash(o.getCustomer()));
         return true;
     }
 
+    // ---------- 回收站 ----------
+    @Override
+    public List<Map<String, Object>> listTrash()
+    {
+        List<Map<String, Object>> rows = orderMapper.selectTrash(access.ownerScope());
+        for (Map<String, Object> row : rows)
+        {
+            row.put("createTime", fmtIfDate(row.get("createTime")));
+            row.put("deleteTime", fmtIfDate(row.get("deleteTime")));
+            row.put("deleteBy", displayMemberName(asStr(row.get("deleteBy"))));
+        }
+        return rows;
+    }
+
+    @Override
+    @Transactional
+    public void restore(Long id)
+    {
+        JiedanOrder o = guardTrash(id);
+        // 原负责人已被删除或停用时，恢复后改由恢复人接手，避免项目没人管
+        Long newOwner = null;
+        if (o.getOwnerId() == null || !access.isAssignable(o.getOwnerId())) newOwner = access.currentUserId();
+        orderMapper.restore(id, newOwner, new Date());
+        audit.record("order.restore", "order", id, o.getTitle(),
+                "从回收站恢复" + (newOwner == null ? "" : "；原负责人不可用，改由 " + access.currentName() + " 负责"));
+    }
+
+    @Override
+    @Transactional
+    public void purge(Long id)
+    {
+        access.requireBoss();
+        JiedanOrder o = guardTrash(id);
+        doDelete(id);
+        audit.record("order.purge", "order", id, o.getTitle(), "从回收站彻底删除");
+    }
+
+    /** 回收站里的项目：必须已删除，且当前登录人有权看。 */
+    private JiedanOrder guardTrash(Long id)
+    {
+        JiedanOrder o = id == null ? null : orderMapper.selectByIdAny(id);
+        if (o == null || o.getDelFlag() == null || o.getDelFlag() != 1 || !access.canAccess(o))
+        {
+            throw new ServiceException("回收站里没有这个项目");
+        }
+        return o;
+    }
+
+    /** 彻底删除一个项目及其所有留言、Bug、进度（不可恢复，只给回收站用）。 */
     private void doDelete(Long id)
     {
         bugUpdateMapper.deleteByOrderId(id);
@@ -328,6 +520,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         touchOrder(o.getId(), new Date());
+        audit.record("bug.delete", "bug", bugId, o.getTitle(), "删除 Bug：" + excerpt(bug.getContent()));
         return voOf(o.getId());
     }
 
@@ -396,6 +589,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         markUnreadForCustomerAction(o, new Date());
+        audit.record("bug.delete", "bug", bugId, o.getTitle(), "客户删除 Bug：" + excerpt(bug.getContent()));
         return getForCustomer(o.getId(), account);
     }
 
@@ -500,6 +694,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         String label = STATUS_LABELS.getOrDefault(status, status);
         addTimeline(o.getId(), byName, "status", "状态更新为「" + label + "」", null, now);
+        audit.record("order.status", "order", o.getId(), o.getTitle(),
+                "状态 " + STATUS_LABELS.getOrDefault(o.getStatus(), strOr(o.getStatus(), "无")) + " → " + label);
         touchUnread(o, by, now);
         pushRecipients(o, by, "🔔 " + label, o.getTitle() + "（" + byName + "）");
         return voOf(o.getId());
@@ -703,6 +899,26 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private String sendKeyOf(Long userId)
     {
         return "push.sendkey." + userId;
+    }
+
+    /** 操作日志里显示的人名：优先账号昵称，找不到就退回“用户#id”。 */
+    private String ownerName(Long userId)
+    {
+        if (userId == null) return "无";
+        String name = accountMapper.selectNickName(userId);
+        return StringUtils.isNotEmpty(name) ? name : "用户#" + userId;
+    }
+
+    private String money(BigDecimal v)
+    {
+        return v == null ? "0" : v.stripTrailingZeros().toPlainString();
+    }
+
+    private String excerpt(String s)
+    {
+        if (s == null || s.trim().isEmpty()) return "（无文字）";
+        String t = s.trim().replaceAll("\\s+", " ");
+        return t.length() <= 60 ? t : t.substring(0, 60) + "…";
     }
 
     private void addTimeline(Long orderId, String user, String type, String content, String attachments, Date time)
@@ -975,6 +1191,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         if (value == null) return "";
         if (value instanceof Date) return fmt((Date) value);
+        // 自定义 SQL 返回的 datetime 列在新版驱动下是 LocalDateTime，统一成和详情一样的“年-月-日 时:分”
+        if (value instanceof java.time.LocalDateTime)
+        {
+            return ((java.time.LocalDateTime) value).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        }
         return value.toString();
     }
 

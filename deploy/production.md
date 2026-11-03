@@ -40,6 +40,35 @@ Java 17 路径为 `/www/server/java/jdk-17.0.8/bin/java`。启动参数包含 `-
 
 第 3 步到第 5 步之间，总管理员能看到全部订单，但旧订单的“负责人”显示可能不对；下属账号还没创建，所以不会出现越权。新装的库用 `fresh-install.sql` 即可，已包含新表和角色。
 
+## 上线前补丁包（回收站 / 操作日志 / 改密码 / 导出 / 自动备份）
+
+在权限升级之上增加：项目删除先进回收站、操作日志、修改密码、订单筛选/分页/导出 Excel、附件安全头，并**堵住匿名上传漏洞**（旧版 `POST /jiedan/media/upload` 不需要登录）。一次性升级步骤：
+
+1. 备份数据库（同上）。
+2. 执行 `deploy/upgrade_hardening_v1.sql`（给 `jiedan_order` 加回收站字段、建 `jiedan_audit_log` 表；可重复执行）。
+3. 按“发布更新”流程部署新版本的后端 JAR、管理后台、客户端。
+4. Nginx 的 `client_max_body_size` 不小于 `55m`；生产配置里如写了 `max-file-size`，改为 `50MB`。
+5. 安装 `deploy/backup.sh` 并加计划任务（见下一节）。
+
+完整的确认项、验收清单和回滚注意事项见 [补丁包升级清单.md](补丁包升级清单.md)。新装的库用 `fresh-install.sql` 即可，已包含这些结构。
+
+## 备份与恢复
+
+`deploy/backup.sh` 每天做三件事：数据库压缩备份并校验、附件增量镜像（附件文件名随机且不会被修改，只需追加）、清理旧备份（日备份留 30 天，每月 1 号的留 1 年）。设置 `OFFSITE_DIR` 会把新备份同步到另一块盘 / 挂载的网盘；设置 `VERIFY_RESTORE=1` 会把当天备份导入临时库验证后再删除（建议每周一次）。部署方法和计划任务见脚本开头注释与补丁包清单第五步。
+
+备份和线上在同一块磁盘上只能防误操作，防不了磁盘损坏——请务必设置异地目录。
+
+**恢复数据库**（会覆盖线上数据，先确认要恢复到哪一份）：
+
+```bash
+systemctl stop xuancheng-order-backend
+gunzip -c /opt/xuancheng-order/backups/db_<日期_时分>.sql.gz \
+  | mysql --defaults-extra-file=/opt/xuancheng-order/config/mysql-root.cnf xc_jiedan
+systemctl start xuancheng-order-backend
+```
+
+**找回误删的附件**：`cp -a -n /opt/xuancheng-order/backups/uploads-mirror/. <上传目录>/`（`-n` 表示不覆盖已有文件）。
+
 ## HTTPS 与 Nginx
 
 站点配置：`/www/server/panel/vhost/nginx/jiedanxt.oksja.cn.conf`。
@@ -49,4 +78,4 @@ HTTP 自动跳转 HTTPS，`/.well-known/acme-challenge/` 使用原站点目录�
 
 ## 验收范围
 
-管理员和客户登录、客户端提交需求、后台收到订单、双向留言、Bug 创建与追加、订单状态同步、附件上传下载、客户间隔离、客户禁止访问管理接口、内部笔记不向客户泄露。没有配置微信推送密钥，外部微信推送保持关闭。
+管理员和客户登录、客户端提交需求、后台收到订单、双向留言、Bug 创建与追加、订单状态同步、附件上传下载、客户间隔离、客户禁止访问管理接口、内部笔记不向客户泄露；匿名不能上传附件；删除进回收站可恢复；操作日志有记录；当天有数据库备份。没有配置微信推送密钥，外部微信推送保持关闭。

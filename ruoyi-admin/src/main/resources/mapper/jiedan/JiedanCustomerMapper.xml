@@ -12,9 +12,11 @@
             coalesce(a.owner_user_id, #{bossId}) as ownerId,
             ou.nick_name    as ownerName,
             (select count(*) from jiedan_order o
-                where o.customer_account collate utf8mb4_general_ci = u.user_name collate utf8mb4_general_ci) as projectCount,
+                where o.customer_account collate utf8mb4_general_ci = u.user_name collate utf8mb4_general_ci
+                and o.del_flag = 0) as projectCount,
             (select count(*) from jiedan_order o
                 where o.customer_account collate utf8mb4_general_ci = u.user_name collate utf8mb4_general_ci
+                and o.del_flag = 0
                 and o.status not in ('done', 'cancelled')) as unfinishedCount
         from sys_user u
         join sys_user_role ur on ur.user_id = u.user_id

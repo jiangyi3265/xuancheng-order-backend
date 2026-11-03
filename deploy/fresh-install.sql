@@ -44,8 +44,13 @@ CREATE TABLE `jiedan_order` (
   `revisions` int DEFAULT '0' COMMENT '改稿次数',
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `del_flag` tinyint NOT NULL DEFAULT '0' COMMENT '0正常 1已删除(回收站)',
+  `delete_time` datetime DEFAULT NULL COMMENT '删除时间',
+  `delete_by` varchar(64) DEFAULT NULL COMMENT '删除人',
+  `delete_by_id` bigint DEFAULT NULL COMMENT '删除人账号id(客户删除为空)',
   PRIMARY KEY (`id`),
-  KEY `idx_jiedan_order_customer_account_id` (`customer_account`,`id`)
+  KEY `idx_jiedan_order_customer_account_id` (`customer_account`,`id`),
+  KEY `idx_jiedan_order_del_owner` (`del_flag`,`owner_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='接单订单';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -185,6 +190,30 @@ CREATE TABLE `jiedan_account_owner` (
   PRIMARY KEY (`user_id`),
   KEY `idx_jiedan_account_owner_owner` (`owner_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='账号归属（下属->上级、客户->负责管理员）';
+
+--
+-- Table structure for table `jiedan_audit_log`
+-- 操作日志：谁在什么时候做了什么重要操作
+--
+
+DROP TABLE IF EXISTS `jiedan_audit_log`;
+CREATE TABLE `jiedan_audit_log` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '日志ID',
+  `create_time` datetime NOT NULL COMMENT '操作时间',
+  `actor_id` bigint DEFAULT NULL COMMENT '操作人账号id(系统任务为空)',
+  `actor_name` varchar(64) DEFAULT '' COMMENT '操作人姓名',
+  `actor_role` varchar(16) DEFAULT '' COMMENT 'boss/employee/customer/system',
+  `action` varchar(32) NOT NULL COMMENT '操作类型，如 order.delete',
+  `target_type` varchar(16) DEFAULT '' COMMENT '对象类型 order/bug/staff/customer/account',
+  `target_id` bigint DEFAULT NULL COMMENT '对象id',
+  `target_name` varchar(200) DEFAULT '' COMMENT '对象名称(项目名/账号名)',
+  `detail` varchar(1000) DEFAULT '' COMMENT '详情，如 金额 1000 -> 1500',
+  `ip` varchar(64) DEFAULT '' COMMENT '操作人IP',
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_audit_time` (`create_time`),
+  KEY `idx_jiedan_audit_actor` (`actor_id`,`create_time`),
+  KEY `idx_jiedan_audit_target` (`target_type`,`target_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='操作日志';
 
 --
 -- Table structure for table `sys_config`

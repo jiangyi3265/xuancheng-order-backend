@@ -32,6 +32,9 @@ public interface JiedanAccountMapper
     /** 归属某管理员的客户账号数 */
     int countOwnedCustomers(Long userId);
 
-    /** 负责人为某账号的项目数 */
+    /** 负责人为某账号的项目数（不含回收站） */
     int countOrdersByOwner(Long userId);
+
+    /** 账号的显示名，找不到返回 null */
+    String selectNickName(Long userId);
 }

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanAuditMapper">
+
+    <insert id="insert">
+        insert into jiedan_audit_log
+        (create_time, actor_id, actor_name, actor_role, action, target_type, target_id, target_name, detail, ip)
+        values
+        (#{time}, #{actorId}, #{actorName}, #{actorRole}, #{action}, #{targetType}, #{targetId}, #{targetName}, #{detail}, #{ip})
+    </insert>
+
+    <sql id="filters">
+        <where>
+            <if test="q.action != null and q.action != ''">and action = #{q.action}</if>
+            <if test="q.targetType != null and q.targetType != ''">and target_type = #{q.targetType}</if>
+            <if test="q.actorId != null">and actor_id = #{q.actorId}</if>
+            <if test="q.keyword != null and q.keyword != ''">
+                and (target_name like concat('%', #{q.keyword}, '%')
+                  or detail like concat('%', #{q.keyword}, '%')
+                  or actor_name like concat('%', #{q.keyword}, '%'))
+            </if>
+            <if test="q.beginTime != null and q.beginTime != ''">and create_time &gt;= #{q.beginTime}</if>
+            <if test="q.endTime != null and q.endTime != ''">and create_time &lt; date_add(#{q.endTime}, interval 1 day)</if>
+        </where>
+    </sql>
+
+    <select id="selectPage" resultType="java.util.LinkedHashMap">
+        select
+            id as id,
+            create_time as createTime,
+            actor_id as actorId,
+            actor_name as actorName,
+            actor_role as actorRole,
+            action as action,
+            target_type as targetType,
+            target_id as targetId,
+            target_name as targetName,
+            detail as detail,
+            ip as ip
+        from jiedan_audit_log
+        <include refid="filters"/>
+        order by id desc
+        limit #{offset}, #{limit}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) from jiedan_audit_log
+        <include refid="filters"/>
+    </select>
+
+</mapper>

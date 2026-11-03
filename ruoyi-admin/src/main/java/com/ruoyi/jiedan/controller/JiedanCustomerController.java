@@ -23,6 +23,7 @@ import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanCustomerMapper;
 import com.ruoyi.jiedan.service.JiedanAccess;
+import com.ruoyi.jiedan.service.JiedanAuditService;
 import com.ruoyi.system.service.ISysRoleService;
 import com.ruoyi.system.service.ISysUserService;
 
@@ -49,6 +50,9 @@ public class JiedanCustomerController extends BaseController
 
     @Autowired
     private JiedanAccess access;
+
+    @Autowired
+    private JiedanAuditService audit;
 
     /** 客户账号列表（含名下项目数 / 未完成数）；下属管理员只看到自己的客户 */
     @GetMapping("/list")
@@ -95,6 +99,7 @@ public class JiedanCustomerController extends BaseController
         user.setRoleIds(new Long[] { customerRoleId() });
         userService.insertUser(user);
         accountMapper.upsertOwner(user.getUserId(), ownerId);
+        audit.record("customer.create", "customer", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建客户账号；归属管理员：" + ownerName(ownerId));
         return AjaxResult.success("客户账号创建成功");
     }
 
@@ -110,7 +115,9 @@ public class JiedanCustomerController extends BaseController
         SysUser user = userService.selectUserById(userId);
         if (user == null || !isCustomer(userId)) return AjaxResult.error("非客户账号，禁止操作");
         if (!access.canManageCustomer(userId)) return AjaxResult.error("无权操作该客户账号");
-        return toAjax(userService.resetUserPwd(userId, SecurityUtils.encryptPassword(password)));
+        int rows = userService.resetUserPwd(userId, SecurityUtils.encryptPassword(password));
+        audit.record("customer.reset", "customer", userId, user.getUserName() + "（" + user.getNickName() + "）", "重置了客户登录密码");
+        return toAjax(rows);
     }
 
     /** 把客户转交给另一位管理员负责（仅总管理员） */
@@ -123,7 +130,10 @@ public class JiedanCustomerController extends BaseController
         if (userId == null || ownerId == null) return AjaxResult.error("缺少参数");
         if (userService.selectUserById(userId) == null || !isCustomer(userId)) return AjaxResult.error("非客户账号，禁止操作");
         if (!access.isAssignable(ownerId)) return AjaxResult.error("归属管理员无效或已停用");
+        SysUser target = userService.selectUserById(userId);
+        Long before = accountMapper.selectOwnerOf(userId);
         accountMapper.upsertOwner(userId, ownerId);
+        audit.record("customer.owner", "customer", userId, target.getUserName() + "（" + target.getNickName() + "）", "归属管理员 " + ownerName(before) + " → " + ownerName(ownerId));
         return AjaxResult.success("已转交");
     }
 
@@ -139,6 +149,7 @@ public class JiedanCustomerController extends BaseController
         customerMapper.clearBinding(user.getUserName());
         accountMapper.deleteOwner(userId);
         userService.deleteUserById(userId);
+        audit.record("customer.delete", "customer", userId, user.getUserName() + "（" + user.getNickName() + "）", "删除客户账号并解绑其名下项目");
         return AjaxResult.success("已删除账号并解绑其项目");
     }
 
@@ -156,6 +167,13 @@ public class JiedanCustomerController extends BaseController
     {
         Long id = accountMapper.selectRoleIdByKey("customer");
         return id != null ? id : 2L; // 兜底：初始化脚本中的客户角色 id
+    }
+
+    private String ownerName(Long userId)
+    {
+        if (userId == null) return "无";
+        String name = accountMapper.selectNickName(userId);
+        return StringUtils.isNotEmpty(name) ? name : "用户#" + userId;
     }
 
     private String trim(Object o)

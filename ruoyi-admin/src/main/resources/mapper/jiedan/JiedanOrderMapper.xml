@@ -25,6 +25,10 @@
         <result property="version"     column="version"     />
         <result property="createTime"  column="create_time" />
         <result property="updateTime"  column="update_time" />
+        <result property="delFlag"     column="del_flag"    />
+        <result property="deleteTime"  column="delete_time" />
+        <result property="deleteBy"    column="delete_by"   />
+        <result property="deleteById"  column="delete_by_id" />
     </resultMap>
 
     <sql id="cols">
@@ -32,8 +36,15 @@
         priority, deadline, requirement, attachments, unread, paid, revisions, version, create_time, update_time
     </sql>
 
+    <sql id="trashCols">
+        id, order_no, title, channel, customer, customer_account, contact, amount, owner_id, status,
+        priority, deadline, unread, paid, revisions, version, create_time, update_time,
+        del_flag, delete_time, delete_by, delete_by_id
+    </sql>
+
+    <!-- 以下查询一律只看未删除（del_flag = 0）的项目，回收站里的项目对所有业务接口都“不存在” -->
     <select id="selectAll" resultMap="JiedanOrderResult">
-        select <include refid="cols"/> from jiedan_order order by id desc
+        select <include refid="cols"/> from jiedan_order where del_flag = 0 order by id desc
     </select>
 
     <select id="selectAdminSummaries" resultType="java.util.LinkedHashMap">
@@ -81,14 +92,15 @@
         ) mc on mc.order_id = o.id
         left join jiedan_timeline lt on lt.id = mc.last_id
         <where>
-            <if test="ownerId != null">o.owner_id = #{ownerId}</if>
+            o.del_flag = 0
+            <if test="ownerId != null">and o.owner_id = #{ownerId}</if>
         </where>
         order by o.id desc
     </select>
 
     <select id="selectByCustomerAccount" parameterType="String" resultMap="JiedanOrderResult">
         select <include refid="cols"/> from jiedan_order
-        where customer_account = #{customerAccount} order by id desc
+        where customer_account = #{customerAccount} and del_flag = 0 order by id desc
     </select>
 
     <select id="selectCustomerSummaries" parameterType="String" resultType="java.util.LinkedHashMap">
@@ -126,27 +138,61 @@
             group by t.order_id
         ) mc on mc.order_id = o.id
         left join jiedan_timeline lt on lt.id = mc.last_id
-        where o.customer_account = #{customerAccount}
+        where o.customer_account = #{customerAccount} and o.del_flag = 0
         order by o.id desc
     </select>
 
     <select id="selectVersionById" parameterType="Long" resultType="Long">
-        select version from jiedan_order where id = #{id}
+        select version from jiedan_order where id = #{id} and del_flag = 0
     </select>
 
     <select id="selectVersionScoped" resultType="Long">
         select version from jiedan_order
-        where id = #{id}
+        where id = #{id} and del_flag = 0
         <if test="ownerId != null">and owner_id = #{ownerId}</if>
     </select>
 
     <select id="selectVersionForCustomer" resultType="Long">
         select version from jiedan_order
-        where id = #{id} and customer_account = #{customerAccount}
+        where id = #{id} and customer_account = #{customerAccount} and del_flag = 0
     </select>
 
     <select id="selectById" parameterType="Long" resultMap="JiedanOrderResult">
-        select <include refid="cols"/> from jiedan_order where id = #{id}
+        select <include refid="cols"/> from jiedan_order where id = #{id} and del_flag = 0
+    </select>
+
+    <!-- 含回收站里的项目：仅用于回收站的恢复 / 彻底删除 -->
+    <select id="selectByIdAny" parameterType="Long" resultMap="JiedanOrderResult">
+        select <include refid="trashCols"/> from jiedan_order where id = #{id}
+    </select>
+
+    <select id="selectTrash" resultType="java.util.LinkedHashMap">
+        select
+            o.id as id,
+            o.order_no as orderNo,
+            o.title as title,
+            o.customer as customer,
+            o.customer_account as customerAccount,
+            o.owner_id as ownerId,
+            o.status as status,
+            o.amount as amount,
+            o.deadline as deadline,
+            o.create_time as createTime,
+            o.delete_time as deleteTime,
+            o.delete_by as deleteBy,
+            o.delete_by_id as deleteById
+        from jiedan_order o
+        where o.del_flag = 1
+        <if test="ownerId != null">and o.owner_id = #{ownerId}</if>
+        order by o.delete_time desc, o.id desc
+    </select>
+
+    <!-- 轻量“变更戳”：后台每 10 秒问一次，戳没变就不必重新拉整个列表 -->
+    <select id="selectStamp" resultType="String">
+        select concat(count(*), '-', coalesce(sum(version), 0), '-', coalesce(max(id), 0))
+        from jiedan_order
+        where del_flag = 0
+        <if test="ownerId != null">and owner_id = #{ownerId}</if>
     </select>
 
     <!-- 记事本单独取，避免把大字段塞进列表 -->
@@ -198,6 +244,24 @@
         update jiedan_order set note_attachments = #{attachments} where id = #{id}
     </update>
 
+    <!-- 放进回收站（软删除）；只会处理还没删除的项目 -->
+    <update id="softDelete">
+        update jiedan_order
+        set del_flag = 1, delete_time = #{time}, delete_by = #{by}, delete_by_id = #{byId},
+            update_time = #{time}, version = version + 1
+        where id = #{id} and del_flag = 0
+    </update>
+
+    <!-- 从回收站恢复；newOwnerId 不为空表示原负责人已不可用，改派给恢复人 -->
+    <update id="restore">
+        update jiedan_order
+        set del_flag = 0, delete_time = null, delete_by = null, delete_by_id = null,
+            update_time = #{time}, version = version + 1
+            <if test="newOwnerId != null">, owner_id = #{newOwnerId}</if>
+        where id = #{id} and del_flag = 1
+    </update>
+
+    <!-- 彻底删除：只用于回收站里的项目 -->
     <delete id="deleteById" parameterType="Long">
         delete from jiedan_order where id = #{id}
     </delete>
