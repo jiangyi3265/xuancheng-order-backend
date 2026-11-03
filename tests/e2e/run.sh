@@ -55,6 +55,7 @@ cleanup() {
   stop_backend
   sleep 1
   "$MYSQL_BIN" -u"$MYSQL_USER" -e "drop database if exists \`$DB\`" >/dev/null 2>&1
+  "$MYSQL_BIN" -u"$MYSQL_USER" -e "drop database if exists \`${DB}_ref\`" >/dev/null 2>&1
   # 只清理 RuoYi 自己写的那些键；如果出现不认识的键，说明有别的程序在用这个库，就不动它
   local stray=0 key
   while IFS= read -r key; do
@@ -79,10 +80,72 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo ">> 建临时库 $DB（fresh-install.sql + seed.sql）"
-"$MYSQL_BIN" -u"$MYSQL_USER" -e "create database \`$DB\` default character set utf8mb4 collate utf8mb4_general_ci" || die "建库失败（检查 MYSQL_PWD）"
-"$MYSQL_BIN" -u"$MYSQL_USER" --default-character-set=utf8mb4 "$DB" < "$ROOT/deploy/fresh-install.sql" || die "导入 fresh-install.sql 失败"
-"$MYSQL_BIN" -u"$MYSQL_USER" --default-character-set=utf8mb4 "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
+mysql_db() { "$MYSQL_BIN" -u"$MYSQL_USER" --default-character-set=utf8mb4 "$@"; }
+new_db() { mysql_db -e "create database \`$1\` default character set utf8mb4 collate utf8mb4_general_ci" || die "建库失败（检查 MYSQL_PWD）"; }
+
+# 表结构指纹：列（类型/可空/默认值/自增）、索引、表引擎与字符集，不含列顺序和注释
+schema_fingerprint() {
+  mysql_db -N -B -e "
+    select 'COL', table_name, column_name, column_type, is_nullable, ifnull(column_default,'<NULL>'), extra
+      from information_schema.columns where table_schema='$1' order by table_name, column_name;
+    select 'IDX', table_name, index_name, non_unique, seq_in_index, column_name
+      from information_schema.statistics where table_schema='$1' order by table_name, index_name, seq_in_index;
+    select 'TAB', table_name, engine, table_collation
+      from information_schema.tables where table_schema='$1' order by table_name;
+    select 'ROLE', role_key, role_name, role_sort, data_scope, status, del_flag
+      from \`$1\`.sys_role order by role_key;"
+}
+
+# 业务数据指纹：升级脚本只加结构，不该改动任何已有业务数据
+data_fingerprint() {
+  mysql_db -N -B "$DB" -e "
+    set session group_concat_max_len = 10000000;
+    select 'ORDERS', count(*), md5(group_concat(concat_ws('|',id,order_no,title,customer_account,amount,owner_id,status,unread,requirement) order by id)) from jiedan_order;
+    select 'TIMELINE', count(*), md5(group_concat(concat_ws('|',id,order_id,user_name,type,content) order by id)) from jiedan_timeline;
+    select 'BUG', count(*), md5(group_concat(concat_ws('|',id,order_id,content,status,created_by) order by id)) from jiedan_bug;
+    select 'USER', count(*), md5(group_concat(concat_ws('|',user_id,user_name,password,status,del_flag) order by user_id)) from sys_user;
+    select 'USER_ROLE', count(*), md5(group_concat(concat_ws('|',user_id,role_id) order by user_id, role_id)) from sys_user_role;
+    select 'SETTING', count(*), md5(group_concat(concat_ws('|',setting_key,setting_value) order by setting_key)) from jiedan_setting;"
+}
+
+if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
+  # 升级演练：旧版库（线上现状）+ 旧版数据 -> 按上线清单的顺序执行两个升级脚本 -> 再跑全部测试
+  [ -f "$E2E_OLD_SCHEMA_SQL" ] || die "找不到旧版建库脚本：$E2E_OLD_SCHEMA_SQL"
+  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1"
+  new_db "$DB"
+  mysql_db "$DB" < "$E2E_OLD_SCHEMA_SQL" || die "导入旧版建库脚本失败"
+  mysql_db "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
+  BEFORE="$(data_fingerprint)"
+  for round in 1 2; do
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_permission_v1.sql" || die "upgrade_permission_v1.sql 第 $round 次执行失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_hardening_v1.sql" || die "upgrade_hardening_v1.sql 第 $round 次执行失败"
+  done
+  echo "   两个升级脚本各执行两遍（含幂等性）：成功"
+  AFTER="$(data_fingerprint)"
+  if [ "$BEFORE" != "$AFTER" ]; then
+    echo "错误：升级脚本改动了已有业务数据" >&2
+    diff <(echo "$BEFORE") <(echo "$AFTER") >&2
+    exit 4
+  fi
+  echo "   升级前后已有业务数据完全一致（订单/时间线/Bug/账号/角色关系/设置）"
+  # 与全新安装的结构逐项比对，防止“升级出来的库”和“新装的库”悄悄不一样
+  DB_REF="${DB}_ref"
+  new_db "$DB_REF"
+  mysql_db "$DB_REF" < "$ROOT/deploy/fresh-install.sql" || die "导入 fresh-install.sql 失败"
+  DRIFT="$(diff <(schema_fingerprint "$DB") <(schema_fingerprint "$DB_REF"))"
+  mysql_db -e "drop database if exists \`$DB_REF\`" >/dev/null 2>&1
+  if [ -n "$DRIFT" ]; then
+    echo "错误：升级后的库结构与 fresh-install.sql 不一致：" >&2
+    echo "$DRIFT" >&2
+    exit 4
+  fi
+  echo "   升级后的表结构、索引、employee 角色与 fresh-install.sql 完全一致"
+else
+  echo ">> 建临时库 $DB（fresh-install.sql + seed.sql）"
+  new_db "$DB"
+  mysql_db "$DB" < "$ROOT/deploy/fresh-install.sql" || die "导入 fresh-install.sql 失败"
+  mysql_db "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
+fi
 
 echo ">> 启动后端 :$PORT（Redis 库 $REDIS_DB）"
 "$JAVA_BIN" -jar "$JAR" --server.port="$PORT" \

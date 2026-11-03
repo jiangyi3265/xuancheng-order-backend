@@ -26,6 +26,18 @@ Windows + Git Bash 下如果设置了 `HTTP_PROXY`，脚本里的等待逻辑已
    - `hardening.test.mjs`：变更戳、回收站（软删除/恢复/彻底删除/原负责人停用后的恢复）、客户撤回限制、操作日志（含日志表故障时业务不受影响）、改密码、Excel 导出（含权限范围与筛选）、附件安全头与上传鉴权、Druid 监控页关闭。
 4. 删临时库、清 Redis、删临时文件。失败时后端日志会留在 `tests/e2e/last-backend.log`。
 
+## 升级演练模式（上线前必跑）
+
+默认模式用的是**新版**建库脚本，测不到“线上那个旧库按清单升级”这条路。上线前用旧版建库脚本再跑一遍：
+
+```bash
+# 取出线上现状对应的旧建库脚本（例：2026-10-29 上线的提交 9489439）
+git show 9489439:deploy/fresh-install.sql > /tmp/old-fresh-install.sql
+MYSQL_PWD=<本机MySQL密码> E2E_REDIS_DB=10 E2E_OLD_SCHEMA_SQL=/tmp/old-fresh-install.sql bash tests/e2e/run.sh
+```
+
+脚本会依次：旧结构建库 → 导入 `seed.sql` 旧数据 → 按清单顺序执行 `upgrade_permission_v1.sql`、`upgrade_hardening_v1.sql`（各跑两遍，验证可重复执行）→ 核对升级前后订单/时间线/Bug/账号/设置的数据指纹完全一致 → 与 `fresh-install.sql` 新建出来的库逐项比对表、列、索引、employee 角色 → 再起新后端跑全部检查。任何一步不一致就会中止并打印差异。
+
 ## 注意
 
 - 测试库每次都是新建的；`permission.test.mjs` 不能在用过的库上重复跑（它要演示一次性的迁移脚本）。
