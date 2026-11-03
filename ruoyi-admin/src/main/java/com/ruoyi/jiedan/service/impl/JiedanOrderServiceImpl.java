@@ -163,13 +163,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             if (!channel.isEmpty() && !channel.equals(asStr(vo.get("channel")))) continue;
             if (!status.isEmpty() && !status.equals(st)) continue;
             if (ownerId != null && !ownerId.equals(asLong(vo.get("ownerId")))) continue;
-            // 收款：1=已收清 0=还欠款（报价大于已收） part=收了一部分
+            // 收款：1=已收清 0=还欠款（报价大于已收） part=收了一部分；“欠款”类不含已取消的项目（取消了就不再追款）
             BigDecimal amt = asDecimal(vo.get("amount"));
             BigDecimal rec = asDecimal(vo.get("receivedAmount"));
             boolean full = isFullyPaid(rec, amt);
+            boolean cancelled = "cancelled".equals(st);
             if ("1".equals(paid) && !full) continue;
-            if ("0".equals(paid) && amt.compareTo(rec) <= 0) continue;
-            if ("part".equals(paid) && !(rec.signum() > 0 && !full)) continue;
+            if ("0".equals(paid) && (cancelled || amt.compareTo(rec) <= 0)) continue;
+            if ("part".equals(paid) && (cancelled || !(rec.signum() > 0 && !full))) continue;
             if (overdueOnly && !(Arrays.asList("pending", "doing", "review").contains(st)
                     && !dl.isEmpty() && dl.compareTo(today) < 0)) continue;
             if (!createFrom.isEmpty() && createDay.compareTo(createFrom) < 0) continue;
