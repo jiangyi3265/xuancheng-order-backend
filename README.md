@@ -57,3 +57,45 @@ MYSQL_PWD=<本机MySQL密码> E2E_REDIS_DB=10 bash tests/e2e/run.sh
 - 后端由同域名 `/jiedan/**`、`/login`、`/captchaImage` 代理，服务监听 `127.0.0.1:18091`。
 - GitHub Actions 只负责构建并保存产物，不自动部署。发布操作见 `deploy/production.md`。
 - 正式管理员密码单独交付；客户账号由管理员在后台「客户账号」中创建。线上没有预置演示数据。
+
+## 新电脑协作开发
+
+默认 `main` 已包含当前开发版本，直接克隆即可，无需切换旧功能分支：
+
+```powershell
+git clone https://github.com/jiangyi3265/xuancheng-order-backend.git
+git clone https://github.com/jiangyi3265/xuancheng-order-admin.git
+git clone https://github.com/jiangyi3265/xuancheng-order-app.git
+```
+
+准备 Git、Node.js 22、JDK 17、Maven 3.9、MySQL 8 和 Redis，并把命令加入 PATH。前端分别在各自目录执行 `npm ci`、`npm run dev`，管理端为 http://localhost:5173，客户端为 http://localhost:5174。
+
+后端按上面的“本机启动”初始化独立开发库并启动。`fresh-install.sql` 已包含当前表结构，新建库不需要再执行旧版升级脚本。开发数据库和 Redis 必须与生产环境隔离；生产数据、附件和私密配置不会随 Git 克隆。
+
+Windows PowerShell 可以通过环境变量覆盖本机配置，不用修改仓库文件：
+
+```powershell
+$env:SPRING_DATASOURCE_DRUID_MASTER_URL = 'jdbc:mysql://localhost:3306/xc_jiedan?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=GMT%2B8'
+$env:SPRING_DATASOURCE_DRUID_MASTER_USERNAME = 'root'
+$env:SPRING_DATASOURCE_DRUID_MASTER_PASSWORD = '<本机数据库密码>'
+$env:SPRING_REDIS_HOST = 'localhost'
+$env:SPRING_REDIS_PORT = '6379'
+$env:SPRING_REDIS_DATABASE = '0' # 使用独立 Redis 或空闲库
+$env:RUOYI_PROFILE = "$PWD/local-uploads"
+mvn -B package
+java -jar ruoyi-admin/target/ruoyi-admin.jar
+```
+
+Redis 如果有密码，另设 `SPRING_REDIS_PASSWORD`。如后端端口调整，前端 PowerShell 设置 `$env:XC_BACKEND = 'http://localhost:18091'` 后再运行 `npm run dev`。
+
+协作时先 `git pull --ff-only`，然后 `git switch -c feat/你的功能名`。提交后推送功能分支并通过 PR 合并 main。AI 流水线是独立项目，接单系统日常开发不依赖它。
+
+仅在全新、可丢弃的本地开发库中，可以在导入 fresh-install.sql 后再导入 tests/e2e/seed.sql，获得测试账号 admin / admin123、cust_a / customer123。该脚本含模拟订单与测试设置，严禁导入生产库。使用 MySQL 客户端导入（从后端仓库目录启动）：
+
+```text
+mysql -u root -p
+CREATE DATABASE xc_jiedan CHARACTER SET utf8mb4;
+USE xc_jiedan;
+SOURCE deploy/fresh-install.sql;
+SOURCE tests/e2e/seed.sql;
+```
