@@ -1,0 +1,18 @@
+import {call,login,good,denied,ok,finish} from './lib.mjs'
+const boss=await login('admin','admin123')
+if(!boss)throw new Error('测试管理员登录失败')
+const name='session_'+Date.now().toString().slice(-9),password='Customer123!'
+ok('创建专用客户',good(await call(boss,'POST','/jiedan/customer',{userName:name,nickName:'会话回归测试',password})))
+const list=await call(boss,'GET','/jiedan/customer/list'),user=list.data.find(u=>u.userName===name)
+const first=await login(name,password),second=await login(name,password)
+ok('客户两个设备均可登录',!!first&&!!second)
+ok('首次登录可访问客户接口',good(await call(first,'GET','/jiedan/portal/orders')))
+ok('管理员重置客户密码',good(await call(boss,'PUT','/jiedan/customer/reset',{userId:user.userId,password:'Updated123!'})))
+ok('重置密码后设备一失效',denied(await call(first,'GET','/jiedan/portal/orders')))
+ok('重置密码后设备二失效',denied(await call(second,'GET','/jiedan/portal/orders')))
+const fresh=await login(name,'Updated123!')
+ok('新密码可重新登录',!!fresh)
+ok('删除客户成功',good(await call(boss,'DELETE','/jiedan/customer/'+user.userId)))
+ok('删除后旧令牌不能读取项目',denied(await call(fresh,'GET','/jiedan/portal/orders')))
+ok('删除后旧令牌不能创建需求',denied(await call(fresh,'POST','/jiedan/order/intake',{title:'不得创建',requirement:'已删除账号',contact:'test'})))
+finish()

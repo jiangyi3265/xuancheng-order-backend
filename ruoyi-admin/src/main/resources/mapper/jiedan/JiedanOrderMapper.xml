@@ -13,6 +13,9 @@
         <result property="amount"      column="amount"      />
         <result property="ownerId"     column="owner_id"    />
         <result property="status"      column="status"      />
+        <result property="handled"     column="handled"     />
+        <result property="urgentUntil" column="urgent_until" />
+        <result property="handledTime" column="handled_time" />
         <result property="priority"    column="priority"    />
         <result property="deadline"    column="deadline"    />
         <result property="requirement" column="requirement" />
@@ -31,11 +34,15 @@
         <result property="deleteTime"  column="delete_time" />
         <result property="deleteBy"    column="delete_by"   />
         <result property="deleteById"  column="delete_by_id" />
+        <result property="nextStep"    column="next_step"   />
+        <result property="nextOwnerId" column="next_owner_id" />
+        <result property="nextDue"     column="next_due"    />
     </resultMap>
 
     <sql id="cols">
         id, order_no, title, channel, customer, customer_account, contact, amount, owner_id, status,
-        priority, deadline, requirement, attachments, unread, paid, received_amount, assign_state, revisions, version, create_time, update_time
+        priority, deadline, requirement, attachments, unread, paid, received_amount, assign_state, revisions, version, create_time, update_time,
+        next_step, next_owner_id, next_due, handled, date_format(urgent_until, '%Y-%m-%d %H:%i') as urgent_until, date_format(handled_time, '%Y-%m-%d %H:%i:%s') as handled_time
     </sql>
 
     <sql id="trashCols">
@@ -45,6 +52,16 @@
     </sql>
 
     <!-- 以下查询一律只看未删除（del_flag = 0）的项目，回收站里的项目对所有业务接口都“不存在” -->
+    <sql id="coverUrl">
+        (select case when img.url like 'data:image/%' then '@inline' else img.url end
+         from json_table(if(json_valid(o.attachments), o.attachments, '[]'), '$[*]' columns (
+             pos for ordinality, kind varchar(40) path '$.type', url longtext path '$.url'
+         )) img
+         where (img.kind='image' or img.kind like 'image/%' or img.url like 'data:image/%'
+                or img.url regexp '[.](png|jpg|jpeg|gif|webp|bmp|avif|svg)$')
+           and ((img.url like '/%' and img.url not like '//%' and locate(char(92),img.url)=0) or img.url like 'data:image/%')
+         order by img.pos limit 1) as coverUrl
+    </sql>
     <select id="selectAll" resultMap="JiedanOrderResult">
         select <include refid="cols"/> from jiedan_order where del_flag = 0 order by id desc
     </select>
@@ -61,13 +78,23 @@
             o.amount as amount,
             o.owner_id as ownerId,
             o.status as status,
+            o.handled as handled,
+            date_format(o.urgent_until, '%Y-%m-%d %H:%i') as urgentUntil,
+            date_format(o.handled_time, '%Y-%m-%d %H:%i:%s') as handledTime,
             o.priority as priority,
             o.deadline as deadline,
             o.requirement as requirement,
+            <include refid="coverUrl"/>,
             o.unread as unread,
             o.paid as paid,
             o.received_amount as receivedAmount,
             o.assign_state as assignState,
+            o.next_step as nextStep,
+            o.next_owner_id as nextOwnerId,
+            o.next_due as nextDue,
+            mm.from_name as mentionFrom,
+            mm.content as mentionContent,
+            mm.create_time as mentionTime,
             (select count(*) from jiedan_approval ap where ap.order_id = o.id and ap.status = 'pending') as pendingApprovals,
             o.revisions as revisions,
             o.version as version,
@@ -78,14 +105,28 @@
                 else json_length(o.attachments)
             end as attachmentCount,
             coalesce(bc.bug_count, 0) as bugCount,
+            bc.last_bug_id as lastBugId,
+            bc.action_bug_id as actionBugId,
+            lt.id as lastMessageId,
+            coalesce(bc.action_count, 0) as actionBugCount,
+            case when bc.action_count > 0 then (
+                select json_arrayagg(json_object('id', b.id, 'content', left(coalesce(b.content, ''), 120)))
+                from jiedan_bug b where b.order_id = o.id and b.status = 'action'
+            ) end as actionBugPreviews,
             coalesce(mc.message_count, 0) as messageCount,
             lt.user_name as lastMessageUser,
             lt.type as lastMessageType,
             lt.content as lastMessageContent,
-            lt.create_time as lastMessageTime
+            lt.create_time as lastMessageTime,
+            le.user_name as lastEventUser,
+            le.type as lastEventType,
+            le.content as lastEventContent,
+            le.create_time as lastEventTime
         from jiedan_order o
         left join (
-            select order_id, count(*) as bug_count
+            select order_id, count(*) as bug_count, max(id) as last_bug_id,
+                   max(case when status = 'action' then id end) as action_bug_id,
+                   sum(case when status = 'action' then 1 else 0 end) as action_count
             from jiedan_bug
             group by order_id
         ) bc on bc.order_id = o.id
@@ -96,6 +137,20 @@
             group by order_id
         ) mc on mc.order_id = o.id
         left join jiedan_timeline lt on lt.id = mc.last_id
+        <!-- 最近一条动态（任意类型）：消息中心直接写出「谁做了什么」 -->
+        left join (
+            select order_id, max(id) as last_id
+            from jiedan_timeline
+            group by order_id
+        ) ec on ec.order_id = o.id
+        left join jiedan_timeline le on le.id = ec.last_id
+        left join (
+            select order_id, max(id) as mention_id
+            from jiedan_mention
+            where member_id = #{me} and read_time is null
+            group by order_id
+        ) um on um.order_id = o.id
+        left join jiedan_mention mm on mm.id = um.mention_id
         <where>
             o.del_flag = 0
             <if test="ownerId != null">and o.owner_id = #{ownerId}</if>
@@ -122,6 +177,7 @@
             o.priority as priority,
             o.deadline as deadline,
             o.requirement as requirement,
+            <include refid="coverUrl"/>,
             o.paid as paid,
             o.revisions as revisions,
             o.version as version,
@@ -161,6 +217,23 @@
         select version from jiedan_order
         where id = #{id} and customer_account = #{customerAccount} and del_flag = 0
     </select>
+
+    <select id="selectScopedForUpdate" resultMap="JiedanOrderResult">
+        select <include refid="cols"/> from jiedan_order where id = #{id} and del_flag = 0
+        <if test="ownerScope != null">and owner_id = #{ownerScope}</if>
+        for update
+    </select>
+
+    <update id="updateUrgentUntil">
+        update jiedan_order set urgent_until = #{urgentUntil,jdbcType=TIMESTAMP}, update_time = now(), version = version + 1
+        where id = #{id}
+    </update>
+
+    <update id="updateHandling">
+        update jiedan_order set handled = #{handled}, handled_time = #{time},
+            update_time = #{time}, version = version + 1
+        where id = #{id}
+    </update>
 
     <select id="selectById" parameterType="Long" resultMap="JiedanOrderResult">
         select <include refid="cols"/> from jiedan_order where id = #{id} and del_flag = 0
@@ -241,6 +314,19 @@
             version = version + 1
         </set>
         where id = #{id}
+    </update>
+
+    <!-- 设置 / 清除下一步：三个字段一起写（允许写成空），版本号 +1 让其他设备刷新 -->
+    <update id="updateNextStep">
+        update jiedan_order
+        set next_step = #{nextStep}, next_owner_id = #{nextOwnerId}, next_due = #{nextDue},
+            update_time = #{updateTime}, version = version + 1
+        where id = #{id}
+    </update>
+
+    <!-- 只让版本号 +1（比如已读回执变化），不动更新时间 -->
+    <update id="bumpVersion">
+        update jiedan_order set version = version + 1 where id = #{id}
     </update>
 
     <update id="updateAttachmentsOnly">

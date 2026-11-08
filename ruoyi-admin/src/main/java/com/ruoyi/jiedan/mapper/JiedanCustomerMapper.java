@@ -11,7 +11,7 @@ import org.apache.ibatis.annotations.Param;
 public interface JiedanCustomerMapper
 {
     /**
-     * 列出客户账号（含归属管理员、名下项目数、未完成项目数）。
+     * 列出客户账号（含负责人、名下项目数、未完成项目数）。
      * ownerId 不为空时只列归属该管理员的客户；没有归属记录的客户视为归 bossId。
      */
     List<Map<String, Object>> selectCustomerAccounts(@Param("ownerId") Long ownerId, @Param("bossId") Long bossId);

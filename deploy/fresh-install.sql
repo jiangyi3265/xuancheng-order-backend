@@ -50,6 +50,12 @@ CREATE TABLE `jiedan_order` (
   `delete_time` datetime DEFAULT NULL COMMENT '删除时间',
   `delete_by` varchar(64) DEFAULT NULL COMMENT '删除人',
   `delete_by_id` bigint DEFAULT NULL COMMENT '删除人账号id(客户删除为空)',
+  `next_step` varchar(200) DEFAULT NULL COMMENT '下一步：做什么（内部）',
+  `next_owner_id` bigint DEFAULT NULL COMMENT '下一步：谁来做（成员id）',
+  `next_due` varchar(20) DEFAULT NULL COMMENT '下一步：截止日期 yyyy-MM-dd',
+  `handled` tinyint(1) NOT NULL DEFAULT 0 COMMENT '内部手动标记：0未处理 1已处理',
+  `urgent_until` datetime DEFAULT NULL COMMENT '项目加急截止时间（北京时间）',
+  `handled_time` datetime DEFAULT NULL COMMENT '最近一次实际切换处理状态的时间',
   PRIMARY KEY (`id`),
   KEY `idx_jiedan_order_customer_account_id` (`customer_account`,`id`),
   KEY `idx_jiedan_order_del_owner` (`del_flag`,`owner_id`)
@@ -757,3 +763,92 @@ UNLOCK TABLES;
 
 -- Dump completed on 2026-06-21 15:40:40
 
+-- Independent pre-sales quotations: safe to rerun; existing orders remain untouched.
+CREATE TABLE IF NOT EXISTS jiedan_quote (
+ id bigint NOT NULL AUTO_INCREMENT,
+ title varchar(200) NOT NULL,
+ requirement text,
+ attachments longtext,
+ employee_id bigint NOT NULL,
+ creator_id bigint NOT NULL,
+ amount decimal(12,2) DEFAULT NULL,
+ quote_note text,
+ status varchar(20) NOT NULL DEFAULT 'pending',
+ order_id bigint DEFAULT NULL,
+ version int NOT NULL DEFAULT 1,
+ notice_version int NOT NULL DEFAULT 1,
+ last_sent_time datetime DEFAULT NULL,
+ source_name varchar(20) DEFAULT NULL,
+ source_seq int unsigned DEFAULT NULL,
+ UNIQUE KEY uq_quote_source_seq(source_name,source_seq),
+ deleted tinyint NOT NULL DEFAULT 0,
+ create_time datetime NOT NULL,
+ update_time datetime NOT NULL,
+ PRIMARY KEY (id),
+ KEY idx_quote_employee (employee_id,deleted,status),
+ KEY idx_quote_status (deleted,status,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS jiedan_quote_read (
+    quote_id bigint NOT NULL,
+    member_id bigint NOT NULL,
+    read_version int NOT NULL,
+    PRIMARY KEY (quote_id, member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+CREATE TABLE IF NOT EXISTS `jiedan_mention` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `order_id` bigint NOT NULL COMMENT '项目ID',
+  `timeline_id` bigint NOT NULL COMMENT '内部记录ID',
+  `member_id` bigint NOT NULL COMMENT '被 @ 的成员',
+  `from_id` bigint DEFAULT NULL COMMENT '谁 @ 的',
+  `from_name` varchar(64) DEFAULT '' COMMENT '谁 @ 的（显示名）',
+  `content` varchar(200) DEFAULT '' COMMENT '摘要',
+  `create_time` datetime NOT NULL COMMENT '时间',
+  `read_time` datetime DEFAULT NULL COMMENT '被 @ 的人打开项目的时间，空=未读',
+  PRIMARY KEY (`id`),
+  KEY `idx_jiedan_mention_member_read` (`member_id`, `read_time`),
+  KEY `idx_jiedan_mention_order` (`order_id`),
+  KEY `idx_jiedan_mention_timeline` (`timeline_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='内部记录 @ 提醒';
+CREATE TABLE IF NOT EXISTS jiedan_webpush_key (
+  id tinyint PRIMARY KEY,
+  public_key varchar(100) NOT NULL,
+  private_key varchar(60) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS jiedan_webpush_device (
+  endpoint_hash char(64) PRIMARY KEY,
+  member_id bigint NOT NULL,
+  binding char(36) NOT NULL,
+  endpoint varchar(2048) NOT NULL,
+  p256dh varchar(100) NOT NULL,
+  auth_key varchar(32) NOT NULL,
+  KEY member_devices(member_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS jiedan_quote_message (
+ id bigint NOT NULL AUTO_INCREMENT,
+ quote_id bigint NOT NULL,
+ employee_id bigint NOT NULL,
+ author_id bigint NOT NULL,
+ author_name varchar(128) NOT NULL,
+ recipient_id bigint DEFAULT NULL,
+ kind varchar(12) NOT NULL,
+ content text,
+ attachments mediumtext,
+ amount decimal(12,2) DEFAULT NULL,
+ client_key varchar(64) DEFAULT NULL,
+ created_at datetime DEFAULT NULL,
+ read_at datetime DEFAULT NULL,
+ PRIMARY KEY (id),
+ UNIQUE KEY uq_quote_message_client (quote_id,author_id,client_key),
+ KEY idx_quote_message_thread (quote_id,employee_id,id),
+ KEY idx_quote_message_inbox (quote_id,recipient_id,read_at,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS jiedan_quote_counter (
+ source_name varchar(20) NOT NULL,
+ last_number int unsigned NOT NULL,
+ PRIMARY KEY(source_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

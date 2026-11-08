@@ -2,6 +2,16 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.ruoyi.jiedan.mapper.JiedanAccountMapper">
 
+    <select id="selectDefaultQuoteEmployeeId" resultType="Long">
+        select u.user_id from jiedan_setting s
+        join sys_user u on cast(u.user_id as char)=s.setting_value
+        where s.setting_key='quote.defaultEmployeeId' and u.status='0' and u.del_flag='0'
+          and exists (select 1 from sys_user_role ur join sys_role r on r.role_id=ur.role_id
+            where ur.user_id=u.user_id and r.role_key='employee' and r.del_flag='0')
+          and not exists (select 1 from sys_user_role ur join sys_role r on r.role_id=ur.role_id
+            where ur.user_id=u.user_id and r.role_key='admin' and r.del_flag='0')
+    </select>
+
     <select id="selectBossUserIds" resultType="Long">
         select distinct u.user_id
         from sys_user u
@@ -51,10 +61,10 @@
             exists (select 1 from sys_user_role ur2
                     join sys_role r2 on r2.role_id = ur2.role_id
                     where ur2.user_id = u.user_id and r2.role_key = 'admin' and r2.del_flag = '0') as isBoss,
-            (select count(*) from jiedan_order o where o.owner_id = u.user_id and o.del_flag = 0) as orderCount,
+            (select count(*) from jiedan_order o where o.owner_id = u.user_id and o.del_flag = 0 and o.status != 'pending') as orderCount,
             (select count(*) from jiedan_order o
                 where o.owner_id = u.user_id and o.del_flag = 0
-                  and o.status not in ('done', 'cancelled')) as unfinishedCount
+                  and o.status not in ('pending', 'done', 'cancelled')) as unfinishedCount
         from sys_user u
         where u.del_flag = '0'
           and exists (select 1 from sys_user_role ur

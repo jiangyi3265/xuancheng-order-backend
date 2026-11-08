@@ -41,6 +41,11 @@ public class LoginUser implements UserDetails
      */
     private Long expireTime;
 
+    private Long rememberedUntil;
+
+    public Long getRememberedUntil() { return rememberedUntil; }
+    public void setRememberedUntil(Long until) { this.rememberedUntil = until; }
+
     /**
      * 登录IP地址
      */

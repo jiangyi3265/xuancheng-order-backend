@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanQuoteMapper">
+ <sql id="columns">q.id,q.title,q.source_name sourceName,q.source_seq sourceSeq,q.requirement,q.attachments,q.employee_id employeeId,q.creator_id creatorId,q.amount,q.quote_note quoteNote,q.status,q.order_id orderId,q.version,q.notice_version noticeVersion,coalesce((select r.read_version from jiedan_quote_read r where r.quote_id=q.id and r.member_id=#{memberId}),0) readVersion,coalesce((select max(m.id) from jiedan_quote_message m where m.quote_id=q.id and m.recipient_id=#{memberId} and m.read_at is null),0) replyVersion,
+   coalesce((select max(m.id) from jiedan_quote_message m where m.quote_id=q.id and (q.creator_id=#{memberId} or (q.employee_id=#{memberId} and m.employee_id=#{memberId}))),0) conversationVersion,
+   q.deleted,DATE_FORMAT(coalesce(q.last_sent_time,q.create_time),'%Y-%m-%d %H:%i:%s') sentTime,DATE_FORMAT(q.create_time,'%Y-%m-%d %H:%i:%s') createTime,DATE_FORMAT(q.update_time,'%Y-%m-%d %H:%i:%s') updateTime,(select nick_name from sys_user where user_id=q.employee_id) employeeName,(select nick_name from sys_user where user_id=q.creator_id) creatorName</sql>
+ <select id="list" resultType="java.util.LinkedHashMap">select <include refid="columns"/> from jiedan_quote q where q.deleted=0 <if test="employeeId != null">and q.employee_id=#{employeeId}</if> order by q.update_time desc,q.id desc</select>
+ <select id="find" resultType="java.util.LinkedHashMap">select <include refid="columns"/> from jiedan_quote q where q.id=#{id} and q.deleted=0 <if test="lock">for update</if></select>
+ <insert id="insert" useGeneratedKeys="true" keyProperty="id">insert into jiedan_quote(title,requirement,attachments,employee_id,creator_id,source_name,source_seq,create_time,last_sent_time,update_time) values(#{title},#{requirement},#{attachments},#{employeeId},#{creatorId},#{sourceName},#{sourceSeq},now(),now(),now())</insert>
+ <update id="update">update jiedan_quote set title=#{title},requirement=#{requirement},attachments=#{attachments},source_name=#{sourceName},source_seq=#{sourceSeq},
+     <if test="newInvitation == true">last_sent_time=now(),</if>
+     <if test="newNotice == true">notice_version=notice_version+1,</if>employee_id=#{employeeId},amount=#{amount},quote_note=#{quoteNote},status=#{status},order_id=#{orderId},deleted=#{deleted},version=version+1,update_time=now() where id=#{id}</update>
+ <select id="counters" resultType="java.util.LinkedHashMap">
+    select source_name sourceName,last_number lastValue from jiedan_quote_counter
+ </select>
+ <insert id="ensureCounter">
+    insert into jiedan_quote_counter(source_name,last_number) values(#{source},0)
+    on duplicate key update last_number=last_number
+ </insert>
+ <select id="lockCounter" resultType="long">
+    select last_number from jiedan_quote_counter where source_name=#{source} for update
+ </select>
+ <update id="advanceCounter">
+    update jiedan_quote_counter set last_number=greatest(last_number,#{number}) where source_name=#{source}
+ </update>
+ <select id="numberExists" resultType="boolean">
+    select exists(select 1 from jiedan_quote where source_name=#{source} and source_seq=#{number})
+ </select>
+ <update id="setInitialTitle">update jiedan_quote set title=#{title} where id=#{id} and title=''</update>
+ <update id="rename">
+    update jiedan_quote set title=#{title}, version=version+1, update_time=now() where id=#{id} and deleted=0
+ </update>
+ <insert id="markRead">
+    insert into jiedan_quote_read(quote_id,member_id,read_version)
+    select q.id,#{memberId},q.notice_version from jiedan_quote q
+    where q.deleted=0 and (q.id,q.notice_version) in
+    <foreach collection="items" item="item" open="(" separator="," close=")">(#{item.id},#{item.noticeVersion})</foreach>
+    <choose>
+       <when test="employeeId != null">and q.employee_id=#{employeeId} and q.status='pending'</when>
+       <otherwise>and q.status='quoted' and q.creator_id=#{memberId}</otherwise>
+    </choose>
+    order by q.id
+    on duplicate key update read_version=greatest(jiedan_quote_read.read_version,values(read_version))
+ </insert>
+ <select id="conversation" resultType="java.util.LinkedHashMap">
+    select id,employee_id employeeId,author_id authorId,author_name authorName,recipient_id recipientId,kind,content,attachments,amount,
+      date_format(created_at,'%Y-%m-%d %H:%i:%s') createdAt
+    from jiedan_quote_message where quote_id=#{quoteId}
+    <if test="employee != null">and employee_id=#{employee}</if>
+    <if test="before != null">and id &lt; #{before}</if>
+    order by id desc limit 41
+ </select>
+ <insert id="insertMessage" useGeneratedKeys="true" keyProperty="id">
+    insert into jiedan_quote_message(quote_id,employee_id,author_id,author_name,recipient_id,kind,content,attachments,amount,client_key,created_at)
+    values(#{quoteId},#{employeeId},#{authorId},#{authorName},#{recipientId},#{kind},#{content},#{attachments},#{amount},#{clientKey},now())
+ </insert>
+ <select id="findClientKey" resultType="long">
+    select id from jiedan_quote_message where quote_id=#{quoteId} and author_id=#{authorId} and client_key=#{clientKey}
+ </select>
+ <update id="touchConversation">update jiedan_quote set update_time=now() where id=#{id}</update>
+ <update id="markRepliesRead">
+    update jiedan_quote_message m join jiedan_quote q on q.id=m.quote_id
+    set m.read_at=now() where m.recipient_id=#{member} and m.read_at is null and q.deleted=0
+    and (q.creator_id=#{member} or q.employee_id=#{member})
+    and <foreach collection="items" item="item" open="(" separator=" or " close=")">(m.quote_id=#{item.id} and m.id &lt;= #{item.replyVersion})</foreach>
+ </update>
+ <select id="activeCount" resultType="int">select count(*) from jiedan_quote where employee_id=#{employeeId} and deleted=0 and status in ('pending','quoted')</select>
+</mapper>

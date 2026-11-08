@@ -58,7 +58,7 @@ public class JiedanAccountController extends BaseController
         if (newPassword.equalsIgnoreCase(loginUser.getUsername())) return AjaxResult.error("新密码不能与登录账号相同");
 
         String encrypted = SecurityUtils.encryptPassword(newPassword);
-        if (userService.resetUserPwd(loginUser.getUserId(), encrypted) <= 0) return AjaxResult.error("修改密码异常，请联系管理员");
+        if (userService.resetUserPwd(loginUser.getUserId(), encrypted) <= 0) return AjaxResult.error("修改密码异常，请联系账号创建者");
 
         // 当前会话继续有效，缓存里的密码同步成新的；其余设备的会话作废
         loginUser.getUser().setPassword(encrypted);

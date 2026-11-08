@@ -70,7 +70,7 @@ public class JiedanPortalController extends BaseController
     public AjaxResult bug(@RequestBody Map<String, Object> body)
     {
         Map<String, Object> vo = service.createBugForCustomer(body, SecurityUtils.getUsername(), nickName());
-        if (vo == null) return AjaxResult.error("Bug 内容不能为空或项目不存在");
+        if (vo == null) return AjaxResult.error("问题内容不能为空或项目不存在");
         return AjaxResult.success(vo);
     }
 
@@ -79,7 +79,7 @@ public class JiedanPortalController extends BaseController
     public AjaxResult removeBug(@PathVariable Long id)
     {
         Map<String, Object> vo = service.deleteBugForCustomer(id, SecurityUtils.getUsername());
-        if (vo == null) return AjaxResult.error("Bug 不存在或无权删除");
+        if (vo == null) return AjaxResult.error("问题不存在或无权删除");
         return AjaxResult.success(vo);
     }
 
@@ -88,7 +88,7 @@ public class JiedanPortalController extends BaseController
     public AjaxResult bugUpdate(@PathVariable Long id, @RequestBody Map<String, Object> body)
     {
         Map<String, Object> vo = service.addBugUpdateForCustomer(id, body, SecurityUtils.getUsername(), nickName());
-        if (vo == null) return AjaxResult.error("追加内容不能为空或 Bug 不存在");
+        if (vo == null) return AjaxResult.error("补充内容不能为空或问题不存在");
         return AjaxResult.success(vo);
     }
 
@@ -97,7 +97,7 @@ public class JiedanPortalController extends BaseController
     public AjaxResult bugStatus(@PathVariable Long id, @RequestBody Map<String, Object> body)
     {
         Map<String, Object> vo = service.changeBugStatusForCustomer(id, body, SecurityUtils.getUsername(), nickName());
-        if (vo == null) return AjaxResult.error("Bug 不存在或无权操作");
+        if (vo == null) return AjaxResult.error("问题不存在或无权操作");
         return AjaxResult.success(vo);
     }
 

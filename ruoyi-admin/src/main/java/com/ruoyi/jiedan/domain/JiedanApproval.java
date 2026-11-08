@@ -3,7 +3,7 @@ package com.ruoyi.jiedan.domain;
 import java.util.Date;
 
 /**
- * 员工申请 jiedan_approval：员工的敏感操作（改报价 / 取消 / 删除 / 收款）先提交申请，老板批准后才生效。
+ * 员工申请 jiedan_approval：员工的敏感操作（改报价 / 取消 / 删除 / 收款）先提交申请，审批通过后才生效。
  */
 public class JiedanApproval
 {

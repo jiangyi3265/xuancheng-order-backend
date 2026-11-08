@@ -30,7 +30,7 @@ die() { echo "错误：$*" >&2; exit 2; }
 winpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi; }
 
 [ -n "$REDIS_DB" ] || die "请用 E2E_REDIS_DB 指定一个空的 Redis 库编号，例如 E2E_REDIS_DB=10"
-[ -f "$JAR" ] || die "找不到后端 jar：$JAR（先在 backend 目录执行 mvn -B package -DskipTests）"
+[ -f "$JAR" ] || die "找不到后端 jar：${JAR}（先在 backend 目录执行 mvn -B package -DskipTests）"
 MYSQL_BIN="$(command -v "$MYSQL_BIN")" || die "找不到 mysql 命令，请设置 E2E_MYSQL_BIN"
 command -v redis-cli >/dev/null 2>&1 || die "找不到 redis-cli"
 
@@ -111,7 +111,7 @@ data_fingerprint() {
 if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
   # 升级演练：旧版库（线上现状）+ 旧版数据 -> 按上线清单的顺序执行两个升级脚本 -> 再跑全部测试
   [ -f "$E2E_OLD_SCHEMA_SQL" ] || die "找不到旧版建库脚本：$E2E_OLD_SCHEMA_SQL"
-  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1 -> upgrade_solo_v1 -> upgrade_approval_v1"
+  echo ">> 升级演练：旧结构($E2E_OLD_SCHEMA_SQL) + seed.sql 旧数据 -> upgrade_permission_v1 -> upgrade_hardening_v1 -> upgrade_solo_v1 -> upgrade_approval_v1 -> upgrade_collab_v1"
   new_db "$DB"
   mysql_db "$DB" < "$E2E_OLD_SCHEMA_SQL" || die "导入旧版建库脚本失败"
   mysql_db "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
@@ -122,7 +122,15 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     mysql_db "$DB" < "$ROOT/deploy/upgrade_permission_v1.sql" || die "upgrade_permission_v1.sql 第 $round 次执行失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_hardening_v1.sql" || die "upgrade_hardening_v1.sql 第 $round 次执行失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_solo_v1.sql" || die "upgrade_solo_v1.sql 第 $round 次执行失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_quote_v1.sql" || die "报价升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_quote_read_v1.sql" || die "报价已读升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_quote_sent_v1.sql" || die "报价发送时间升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_quote_chat_v1.sql" || die "报价沟通升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_approval_v1.sql" || die "upgrade_approval_v1.sql 第 $round 次执行失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_webpush_v1.sql" || die "系统推送升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_collab_v1.sql" || die "upgrade_collab_v1.sql 第 $round 次执行失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_project_handling_v1.sql" || die "项目处理状态升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_project_urgency_v1.sql" || die "项目加急日期升级失败"
   done
   echo "   四个升级脚本各执行两遍（含幂等性）：成功"
   AFTER="$(data_fingerprint)"
@@ -158,17 +166,18 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
   fi
   echo "   升级后的表结构、索引、employee 角色与 fresh-install.sql 完全一致"
 else
-  echo ">> 建临时库 $DB（fresh-install.sql + seed.sql）"
+  echo ">> 建临时库 ${DB}（fresh-install.sql + seed.sql）"
   new_db "$DB"
   mysql_db "$DB" < "$ROOT/deploy/fresh-install.sql" || die "导入 fresh-install.sql 失败"
   mysql_db "$DB" < "$HERE/seed.sql" || die "导入 seed.sql 失败"
 fi
 
-echo ">> 启动后端 :$PORT（Redis 库 $REDIS_DB）"
-"$JAVA_BIN" -jar "$JAR" --server.port="$PORT" \
+echo ">> 启动后端 :${PORT}（Redis 库 ${REDIS_DB}）"
+"$JAVA_BIN" -Duser.timezone="${E2E_TIMEZONE:-Asia/Shanghai}" -jar "$JAR" --server.port="$PORT" \
   "--spring.datasource.druid.master.url=jdbc:mysql://localhost:3306/$DB?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=GMT%2B8" \
   --spring.redis.database="$REDIS_DB" \
   "--ruoyi.profile=$(winpath "$PROFILE_DIR")" \
+  "--jiedan.wecom.api-base=http://127.0.0.1:${E2E_WECOM_PORT:-18199}" \
   --logging.level.com.ruoyi=info > "$LOG" 2>&1 &
 JPID=$!
 
@@ -185,14 +194,14 @@ if [ "$UP" != "1" ]; then
   exit 3
 fi
 
-export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER"
+export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER" E2E_WECOM_PORT="${E2E_WECOM_PORT:-18199}"
 RC=0
-for t in permission hardening solo flow digest; do
+for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session; do
   echo
   echo "################ $t.test.mjs ################"
   node "$HERE/$t.test.mjs" || RC=1
 done
 
 echo
-if [ "$RC" = "0" ]; then echo "全部通过"; else echo "有失败项，后端日志：$LOG（脚本退出后会被删除，需要的话请先复制）"; fi
+if [ "$RC" = "0" ]; then echo "全部通过"; else echo "有失败项，后端日志：${LOG}（脚本退出后会被删除，需要的话请先复制）"; fi
 exit $RC

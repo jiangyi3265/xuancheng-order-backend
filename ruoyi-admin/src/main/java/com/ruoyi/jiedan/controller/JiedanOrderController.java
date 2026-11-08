@@ -82,6 +82,8 @@ public class JiedanOrderController extends BaseController
     public void export(@RequestParam Map<String, String> params, HttpServletResponse response) throws IOException
     {
         List<Map<String, Object>> rows = service.listFiltered(params);
+        if ("1".equals(params.get("confirmedOnly")))
+            rows.removeIf(row -> "pending".equals(row.get("status")));
         byte[] bytes = exporter.build(rows);
         audit.record("order.export", "order", null, "订单导出", "导出 " + rows.size() + " 条" + describe(params));
 
@@ -99,6 +101,20 @@ public class JiedanOrderController extends BaseController
     public AjaxResult income()
     {
         return AjaxResult.success(service.income());
+    }
+
+    @PutMapping("/{id}/urgency")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult setUrgency(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.setUrgency(id, body));
+    }
+
+    @PutMapping("/{id}/handling")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult setHandling(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.setHandling(id, body));
     }
 
     /** 员工接收老板派来的项目。 */
@@ -216,7 +232,7 @@ public class JiedanOrderController extends BaseController
     public AjaxResult bug(@RequestBody Map<String, Object> body)
     {
         Map<String, Object> vo = service.createBug(body);
-        if (vo == null) return AjaxResult.error("Bug 内容不能为空或订单不存在");
+        if (vo == null) return AjaxResult.error("问题内容不能为空或项目不存在");
         return AjaxResult.success(vo);
     }
 
@@ -225,7 +241,7 @@ public class JiedanOrderController extends BaseController
     public AjaxResult removeBug(@PathVariable Long id)
     {
         Map<String, Object> vo = service.deleteBug(id);
-        if (vo == null) return AjaxResult.error("Bug 不存在");
+        if (vo == null) return AjaxResult.error("问题不存在");
         return AjaxResult.success(vo);
     }
 
@@ -234,7 +250,7 @@ public class JiedanOrderController extends BaseController
     public AjaxResult bugUpdate(@PathVariable Long id, @RequestBody Map<String, Object> body)
     {
         Map<String, Object> vo = service.addBugUpdate(id, body);
-        if (vo == null) return AjaxResult.error("追加内容不能为空或 Bug 不存在");
+        if (vo == null) return AjaxResult.error("补充内容不能为空或问题不存在");
         return AjaxResult.success(vo);
     }
 
@@ -243,7 +259,7 @@ public class JiedanOrderController extends BaseController
     public AjaxResult bugStatus(@PathVariable Long id, @RequestBody Map<String, Object> body)
     {
         Map<String, Object> vo = service.changeBugStatus(id, body);
-        if (vo == null) return AjaxResult.error("Bug 不存在");
+        if (vo == null) return AjaxResult.error("问题不存在");
         return AjaxResult.success(vo);
     }
 
@@ -266,6 +282,20 @@ public class JiedanOrderController extends BaseController
     public AjaxResult progress(@RequestBody Map<String, Object> body)
     {
         return AjaxResult.success(service.addProgress(body));
+    }
+
+    @PutMapping("/{id}/next")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult setNext(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.setNextStep(id, body));
+    }
+
+    @PostMapping("/{id}/next/done")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult completeNext(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body)
+    {
+        return AjaxResult.success(service.completeNextStep(id, body));
     }
 
     @PutMapping("/status")
@@ -291,6 +321,14 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.addRevision(body));
     }
 
+    @PostMapping("/{id}/pending-reminder")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult remindPendingItem(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        service.remindPendingItem(id, body);
+        return AjaxResult.success();
+    }
+
     @PostMapping("/nudge")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult nudge(@RequestBody Map<String, Object> body)
@@ -298,7 +336,7 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.nudge(body));
     }
 
-    /** 客户需求提交：必须先登录客户账号；负责人由该客户的归属管理员决定，不看前端传值。 */
+    /** 客户需求提交：必须先登录客户账号；负责人由该客户的负责人决定，不看前端传值。 */
     @PostMapping("/intake")
     @PreAuthorize("@ss.hasRole('customer')")
     public AjaxResult intake(@RequestBody Map<String, Object> body)

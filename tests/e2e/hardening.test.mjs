@@ -274,6 +274,11 @@ r = await upload(boss, 'a.png', png, 'image/png')
 res = await fetch(BASE + r.data.url)
 ok('png 正常显示，不受 CSP 影响', res.status === 200 && res.headers.get('content-type') === 'image/png' && !res.headers.get('content-security-policy'))
 
+const image=r.data
+const coverOrder=(await call(boss,'POST','/jiedan/order',{title:'封面校验',channel:'wechat',customerAccount:'hc2',attachments:[{type:'file',name:'说明.txt',url:'/test/readme.txt'},{...image,type:'image'}]})).data
+ok('项目列表跳过普通文件，显示项目实际上传的图片',(await call(boss,'GET','/jiedan/order/list')).data.find(o=>o.id===coverOrder.id)?.coverUrl===image.url)
+ok('客户项目列表与详情显示同一张封面',(await call(c2,'GET','/jiedan/portal/orders')).data.find(o=>o.id===coverOrder.id)?.coverUrl===image.url && (await call(c2,'GET','/jiedan/portal/orders/'+coverOrder.id)).data.coverUrl===image.url)
+ok('无附件的项目没有示例封面',(await call(boss,'GET','/jiedan/order/list')).data.some(o=>o.title!=='封面校验' && !o.coverUrl))
 const big = Buffer.alloc(12 * 1024 * 1024, 7) // 12MB：超过旧的 10MB 上限
 r = await upload(boss, 'big.mp4', big, 'video/mp4')
 ok('12MB 的视频可以上传(上限已与 50MB 对齐)', good(r), JSON.stringify(r).slice(0, 200))
@@ -281,6 +286,23 @@ ok('无令牌不能上传(匿名读取的放行规则不能连带放开上传)',
 ok('乱写的令牌不能上传', denied(await upload('not-a-real-token', 'x.png', png, 'image/png')))
 ok('客户可以上传', good(await upload(c2, 'c.png', png, 'image/png')))
 ok('下属可以上传', good(await upload(tN, 's.png', png, 'image/png')))
+
+section('项目计数与导出随确认状态更新')
+const countForOwner = async () => (await call(boss, 'GET', '/jiedan/staff/list')).data.find(o => o.id === hs1).orderCount
+const startingCount = await countForOwner()
+const pendingTitle = 'H-仅计确认后'
+const pendingOrder = (await call(tN, 'POST', '/jiedan/order', {title:pendingTitle})).data
+ok('创建待确认记录保留负责人，但名下正式项目数不变', pendingOrder.status === 'pending' && await countForOwner() === startingCount)
+const exported = async search => xlsxText(Buffer.from(await (await raw(tN, 'GET', '/jiedan/order/export?keyword=' + encodeURIComponent(pendingTitle) + '&' + search)).arrayBuffer()))
+if (bossText !== null) {
+  ok('导出全部项目时排除待确认', !(await exported('confirmedOnly=1')).includes(pendingTitle))
+  ok('待确认筛选可以单独导出', (await exported('status=pending')).includes(pendingTitle))
+}
+await call(boss, 'PUT', '/jiedan/order/status', {id:pendingOrder.id,status:'doing'})
+ok('转为进行中后计入负责人项目数', await countForOwner() === startingCount + 1)
+if (bossText !== null) ok('确认后进入全部项目导出', (await exported('confirmedOnly=1')).includes(pendingTitle))
+await call(boss, 'PUT', '/jiedan/order/status', {id:pendingOrder.id,status:'pending'})
+ok('退回待确认后回到独立计数', await countForOwner() === startingCount)
 
 section('I 安全：Druid 监控页不对外')
 res = await fetch(BASE + '/druid/index.html')

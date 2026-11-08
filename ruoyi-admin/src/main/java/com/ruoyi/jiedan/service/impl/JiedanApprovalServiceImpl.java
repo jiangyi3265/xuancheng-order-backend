@@ -81,13 +81,13 @@ public class JiedanApprovalServiceImpl implements IJiedanApprovalService
     @Transactional
     public Map<String, Object> create(Map<String, Object> p)
     {
-        if (access.isBoss()) throw new ServiceException("你是老板，可以直接操作，不需要提交申请");
+        if (access.isBoss()) throw new ServiceException("你可以直接操作，不需要提交申请");
         Long orderId = asLong(p.get("orderId"));
         JiedanOrder o = orderId == null ? null : orderMapper.selectById(orderId);
         if (o == null || !access.canAccess(o)) throw new ServiceException(JiedanAccess.DENIED);
         if ("pending".equals(o.getAssignState()))
         {
-            throw new ServiceException("老板刚把这个项目派给你，请先点“接收”（或“拒绝”）再提交申请");
+            throw new ServiceException("项目已分配给你，请先点“接收”（或“拒绝”）再提交申请");
         }
 
         String type = p.get("type") == null ? "" : p.get("type").toString();
@@ -132,7 +132,7 @@ public class JiedanApprovalServiceImpl implements IJiedanApprovalService
         // 报价 / 取消 / 删除同一个项目同一类只留一条；收款可以分几笔申请
         if (!JiedanApproval.TYPE_PAYMENT.equals(type) && approvalMapper.countPending(orderId, type) > 0)
         {
-            throw new ServiceException("已经有一条同样的申请在等老板批了，不用重复提交");
+            throw new ServiceException("已经有一条同样的申请在等待审批了，不用重复提交");
         }
 
         Date now = new Date();

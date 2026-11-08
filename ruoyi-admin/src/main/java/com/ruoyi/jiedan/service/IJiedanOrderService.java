@@ -71,7 +71,7 @@ public interface IJiedanOrderService
     /** 管理端建单：下属管理员只能建在自己名下，总管理员可指派负责人 */
     Map<String, Object> create(Map<String, Object> payload);
 
-    /** 客户端提交需求：自动落到该客户归属管理员的名下 */
+    /** 客户端提交需求：自动落到该客户负责人的名下 */
     Map<String, Object> createFromCustomer(Map<String, Object> payload, String account);
 
     Map<String, Object> update(Map<String, Object> payload);
@@ -106,7 +106,17 @@ public interface IJiedanOrderService
 
     Map<String, Object> addProgress(Map<String, Object> payload);
 
+    /** 设置 / 清除下一步（content 为空表示清除） */
+    Map<String, Object> setNextStep(Long id, Map<String, Object> payload);
+
+    /** 完成当前下一步；payload 里带 content 时接着安排新的下一步 */
+    Map<String, Object> completeNextStep(Long id, Map<String, Object> payload);
+
     Map<String, Object> changeStatus(Map<String, Object> payload);
+
+    Map<String, Object> setHandling(Long id, Map<String, Object> payload);
+
+    Map<String, Object> setUrgency(Long id, Map<String, Object> payload);
 
     Map<String, Object> markRead(Long id, Long memberId);
 
@@ -115,6 +125,8 @@ public interface IJiedanOrderService
 
     /** 催一下（推送对方 + 记时间线） */
     Map<String, Object> nudge(Map<String, Object> payload);
+
+    void remindPendingItem(Long id, Map<String, Object> payload);
 
     /** 推送设置：读取 */
     Map<String, String> getPushConfig();

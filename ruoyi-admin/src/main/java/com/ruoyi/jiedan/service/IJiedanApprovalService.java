@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 员工申请：改报价 / 取消 / 删除 / 收款这类敏感操作，员工先提交申请，老板批准后才生效。
+ * 员工申请：改报价 / 取消 / 删除 / 收款这类敏感操作，员工先提交申请，审批通过后才生效。
  */
 public interface IJiedanApprovalService
 {

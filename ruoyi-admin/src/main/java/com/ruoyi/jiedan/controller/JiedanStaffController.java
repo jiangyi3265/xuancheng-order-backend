@@ -74,6 +74,7 @@ public class JiedanStaffController extends BaseController
     {
         Long scope = access.isBoss() ? null : access.currentUserId();
         List<Map<String, Object>> result = new ArrayList<>();
+        Long quoteEmployee = scope == null ? accountMapper.selectDefaultQuoteEmployeeId() : null;
         for (Map<String, Object> row : accountMapper.selectStaff(scope))
         {
             boolean boss = isTrue(row.get("isBoss"));
@@ -84,6 +85,7 @@ public class JiedanStaffController extends BaseController
             vo.put("role", boss ? "boss" : "employee");
             vo.put("roleLabel", roleLabel(boss));
             vo.put("status", row.get("status"));
+            vo.put("defaultQuoteEmployee", quoteEmployee != null && quoteEmployee.equals(row.get("userId")));
             vo.put("orderCount", row.get("orderCount"));
             vo.put("unfinishedCount", row.get("unfinishedCount"));
             vo.put("createTime", row.get("createTime"));
@@ -116,18 +118,18 @@ public class JiedanStaffController extends BaseController
         if (!userService.checkUserNameUnique(user)) return AjaxResult.error("账号「" + userName + "」已存在");
 
         Long roleId = accountMapper.selectRoleIdByKey(JiedanAccess.ROLE_STAFF);
-        if (roleId == null) return AjaxResult.error("缺少「下属管理员」角色，请先执行 upgrade_permission_v1.sql");
+        if (roleId == null) return AjaxResult.error("缺少协作账号权限配置，请先执行 upgrade_permission_v1.sql");
 
         user.setNickName(StringUtils.isEmpty(nickName) ? userName : nickName);
         user.setPassword(SecurityUtils.encryptPassword(password));
         user.setStatus("0");
         user.setCreateBy(SecurityUtils.getUsername());
-        user.setRemark("下属管理员（后台创建）");
+        user.setRemark("协作账号（后台创建）");
         user.setRoleIds(new Long[] { roleId });
         userService.insertUser(user);
         accountMapper.upsertOwner(user.getUserId(), access.currentUserId());
-        audit.record("staff.create", "staff", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建下属管理员账号");
-        return AjaxResult.success("下属管理员创建成功");
+        audit.record("staff.create", "staff", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建协作账号");
+        return AjaxResult.success("成员创建成功");
     }
 
     /** 重置下属管理员密码，并让其已登录的会话失效 */
@@ -140,7 +142,7 @@ public class JiedanStaffController extends BaseController
         if (userId == null) return AjaxResult.error("缺少 userId");
         if (password.length() < 5 || password.length() > 20) return AjaxResult.error("密码长度需为 5-20 位");
         SysUser user = requireStaffMember(userId);
-        if (user == null) return AjaxResult.error("不是下属管理员账号，禁止操作");
+        if (user == null) return AjaxResult.error("此账号不支持该操作");
         int rows = userService.resetUserPwd(userId, SecurityUtils.encryptPassword(password));
         kick(user.getUserName());
         audit.record("staff.reset", "staff", userId, user.getUserName() + "（" + user.getNickName() + "）", "重置了登录密码，并让其已登录设备下线");
@@ -157,7 +159,7 @@ public class JiedanStaffController extends BaseController
         if (userId == null) return AjaxResult.error("缺少 userId");
         if (!"0".equals(status) && !"1".equals(status)) return AjaxResult.error("状态不正确");
         SysUser user = requireStaffMember(userId);
-        if (user == null) return AjaxResult.error("不是下属管理员账号，禁止操作");
+        if (user == null) return AjaxResult.error("此账号不支持该操作");
         SysUser upd = new SysUser();
         upd.setUserId(userId);
         upd.setStatus(status);
@@ -168,13 +170,17 @@ public class JiedanStaffController extends BaseController
         return toAjax(rows);
     }
 
+    @Autowired
+    private com.ruoyi.jiedan.mapper.JiedanQuoteMapper quoteMapper;
+
     /** 删除下属管理员：名下没有项目、没有客户账号时才允许，否则请先停用或转交 */
     @DeleteMapping("/{userId}")
     @PreAuthorize("@ss.hasRole('admin')")
     public AjaxResult remove(@PathVariable Long userId)
     {
         SysUser user = requireStaffMember(userId);
-        if (user == null) return AjaxResult.error("不是下属管理员账号，禁止删除");
+        if (user == null) return AjaxResult.error("此账号不可删除");
+        if (quoteMapper.activeCount(userId) > 0) return AjaxResult.error("名下还有报价单，请先重新指派或删除报价单（或停用账号）");
         int orders = accountMapper.countOrdersByOwner(userId);
         if (orders > 0) return AjaxResult.error("名下还有 " + orders + " 个项目，请先转派后再删除（或直接停用账号）");
         int customers = accountMapper.countOwnedCustomers(userId);
@@ -182,7 +188,7 @@ public class JiedanStaffController extends BaseController
         kick(user.getUserName());
         accountMapper.deleteOwner(userId);
         userService.deleteUserById(userId);
-        audit.record("staff.delete", "staff", userId, user.getUserName() + "（" + user.getNickName() + "）", "删除下属管理员账号");
+        audit.record("staff.delete", "staff", userId, user.getUserName() + "（" + user.getNickName() + "）", "删除协作账号");
         return AjaxResult.success("已删除账号");
     }
 

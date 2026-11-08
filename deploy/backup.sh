@@ -59,7 +59,8 @@ fi
 gzip -t "$TMP_DUMP" || { rm -f "$TMP_DUMP"; fail "备份文件损坏（gzip 校验失败）"; }
 SIZE="$(wc -c < "$TMP_DUMP" | tr -d ' ')"
 [ "$SIZE" -gt 2048 ] || { rm -f "$TMP_DUMP"; fail "备份文件异常小（${SIZE} 字节），已丢弃"; }
-gzip -dc "$TMP_DUMP" | grep -q 'CREATE TABLE `jiedan_order`' || { rm -f "$TMP_DUMP"; fail "备份里没有订单表，已丢弃"; }
+# 读完整份备份，避免匹配后提前关闭管道，使 gzip 在 pipefail 下因 SIGPIPE 被判失败。
+gzip -dc "$TMP_DUMP" | awk '$1 == "CREATE" && $2 == "TABLE" && $3 == "`jiedan_order`" { found = 1 } END { exit !found }' || { rm -f "$TMP_DUMP"; fail "备份里没有订单表，已丢弃"; }
 mv "$TMP_DUMP" "$DUMP"
 log "数据库备份完成：$(basename "$DUMP")（${SIZE} 字节）"
 

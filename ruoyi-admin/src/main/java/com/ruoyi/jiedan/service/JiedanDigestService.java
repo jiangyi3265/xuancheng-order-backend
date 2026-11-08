@@ -61,6 +61,12 @@ public class JiedanDigestService
     @Autowired
     private JiedanPushService pushService;
 
+    @Autowired
+    private com.ruoyi.jiedan.mapper.JiedanSettingMapper settingMapper;
+
+    @Autowired
+    private com.ruoyi.jiedan.mapper.JiedanMentionMapper mentionMapper;
+
     /** 一组项目计数（全局一份给老板，每个负责人一份给员工） */
     private static class Tally
     {
@@ -70,6 +76,8 @@ public class JiedanDigestService
         int review;
         int owedCount;
         BigDecimal owedSum = BigDecimal.ZERO;
+        /** 待确认 / 进行中、超过 N 天没有任何动静 */
+        int stalled;
     }
 
     /** 申请计数（全局一份给老板，每个申请人一份给员工） */
@@ -97,10 +105,25 @@ public class JiedanDigestService
         // ---- 项目：一次读出，按负责人分组计数 ----
         Tally all = new Tally();
         Map<Long, Tally> byOwner = new HashMap<>();
+        int stallDays = stallDays();
+        Instant stallBefore = now.minus(Duration.ofDays(stallDays));
+        // 下一步今天到期 / 已过期，按“下一步交给谁”计数
+        Map<Long, Integer> nextDue = new HashMap<>();
         for (JiedanOrder o : orderMapper.selectAll())
         {
             String st = o.getStatus();
             if (st == null || "cancelled".equals(st)) continue; // 已取消的项目哪里都不算
+            if (!"done".equals(st) && o.getNextOwnerId() != null && o.getNextStep() != null && !o.getNextStep().trim().isEmpty()
+                    && o.getNextDue() != null && !o.getNextDue().trim().isEmpty() && o.getNextDue().trim().compareTo(today) <= 0)
+            {
+                nextDue.merge(o.getNextOwnerId(), 1, Integer::sum);
+            }
+            if (("pending".equals(st) || "doing".equals(st)) && o.getUpdateTime() != null
+                    && Instant.ofEpochMilli(o.getUpdateTime().getTime()).isBefore(stallBefore))
+            {
+                all.stalled++;
+                if (o.getOwnerId() != null) byOwner.computeIfAbsent(o.getOwnerId(), k -> new Tally()).stalled++;
+            }
             Tally mine = o.getOwnerId() == null ? null : byOwner.computeIfAbsent(o.getOwnerId(), k -> new Tally());
             String dl = o.getDeadline() == null ? "" : o.getDeadline().trim();
 
@@ -145,6 +168,15 @@ public class JiedanDigestService
             if (requester != null) approvalsByRequester.computeIfAbsent(requester, k -> new ApprovalTally()).add(created);
         }
 
+        // ---- 还没看的 @ ----
+        Map<Long, Integer> mentions = new HashMap<>();
+        for (Map<String, Object> r : mentionMapper.countUnreadByMember())
+        {
+            Long m = toLong(r.get("memberId"));
+            Long c = toLong(r.get("cnt"));
+            if (m != null && c != null) mentions.put(m, c.intValue());
+        }
+
         // ---- 账号：老板 + 在用的员工 ----
         Set<Long> bossIds = new HashSet<>(accountMapper.selectBossUserIds());
         List<Map<String, Object>> out = new ArrayList<>();
@@ -158,6 +190,13 @@ public class JiedanDigestService
             List<String> lines = boss
                     ? bossLines(all, allApprovals, now)
                     : employeeLines(byOwner.get(id), approvalsByRequester.get(id));
+            // 协作提醒：下一步到期、项目停滞、@我 没看
+            int dueMine = nextDue.getOrDefault(id, 0);
+            if (dueMine > 0) lines.add(dueMine + " 件交给你的下一步今天到期或已过期");
+            int stalled = boss ? all.stalled : (byOwner.get(id) == null ? 0 : byOwner.get(id).stalled);
+            if (stalled > 0) lines.add(stalled + " 个项目超过 " + stallDays + " 天没有动静");
+            int unseen = mentions.getOrDefault(id, 0);
+            if (unseen > 0) lines.add(unseen + " 条 @你 的内部记录还没看");
             if (lines.isEmpty()) continue;
 
             Map<String, Object> d = new LinkedHashMap<>();
@@ -184,7 +223,7 @@ public class JiedanDigestService
             String body = String.valueOf(d.get("body")).replace("\n", "\n\n");
             try
             {
-                pushService.pushToMember(memberId, String.valueOf(d.get("title")), body);
+                pushService.pushToMember(memberId, String.valueOf(d.get("title")), body, null);
                 n++;
             }
             catch (Exception e)
@@ -210,7 +249,7 @@ public class JiedanDigestService
             }
             lines.add(approvals.count + " 条申请等你批准" + wait);
         }
-        if (t.toAccept > 0) lines.add(t.toAccept + " 个项目等员工接收");
+        if (t.toAccept > 0) lines.add(t.toAccept + " 个项目待接收");
         if (t.review > 0) lines.add(t.review + " 个项目待验收");
         if (t.overdue > 0) lines.add(t.overdue + " 个项目已逾期");
         if (t.owedCount > 0) lines.add(t.owedCount + " 个已完成的项目还没收齐款，共欠 ¥" + money(t.owedSum));
@@ -227,8 +266,22 @@ public class JiedanDigestService
             if (t.overdue > 0) lines.add(t.overdue + " 个项目已逾期");
             if (t.noDeadline > 0) lines.add(t.noDeadline + " 个进行中的项目没填截止日期");
         }
-        if (approvals != null && approvals.count > 0) lines.add("你有 " + approvals.count + " 条申请还在等老板批");
+        if (approvals != null && approvals.count > 0) lines.add("你有 " + approvals.count + " 条申请还在等待审批");
         return lines;
+    }
+
+    /** 待确认 / 进行中的项目多少天没动静算“停滞”，设置里的 push.stallDays，默认 3 天 */
+    private int stallDays()
+    {
+        try
+        {
+            int n = Integer.parseInt(String.valueOf(settingMapper.selectValue("push.stallDays")).trim());
+            return n >= 1 && n <= 60 ? n : 3;
+        }
+        catch (Exception e)
+        {
+            return 3;
+        }
     }
 
     /** 金额：整数不带小数，有小数保留两位 */

@@ -43,7 +43,7 @@ function stat(body) {
     appr: n(/(\d+) 条申请等你批准/),
     hasWait: /条申请等你批准（最久的(已等 \d+ 天|等了不到 1 天)）/.test(body),
     wait: n(/最久的已等 (\d+) 天/),
-    toAccept: n(/(\d+) 个项目等员工接收/),
+    toAccept: n(/(\d+) 个项目待接收/),
     review: n(/(\d+) 个项目待验收/),
     overdue: n(/(\d+) 个项目已逾期/),
     owed: n(/(\d+) 个已完成的项目还没收齐款/),
@@ -102,7 +102,7 @@ const oA = r.data.id
 let d = await digestOf(dg1)
 ok('员工：出现“1 个项目等你接收”', d?.body === '1 个项目等你接收', JSON.stringify(d))
 ok('员工汇总的姓名和角色', d?.name === '小钱' && d?.role === 'employee' && d?.title === '📋 今日汇总', JSON.stringify(d))
-ok('老板：只多了一个“等员工接收”', diff(b0, await bossNow()) === only({ toAccept: 1 }), diff(b0, await bossNow()))
+ok('老板：只多了一个“待接收”', diff(b0, await bossNow()) === only({ toAccept: 1 }), diff(b0, await bossNow()))
 ok('另一个员工 dg2 不受影响', !(await digestOf(dg2)))
 ok('老板的汇总角色是 boss', (await digestOf(bossId))?.role === 'boss')
 
@@ -127,7 +127,7 @@ ok('老板验收通过：员工和老板都回到基线', good(await setStatus(b
 r = await post(boss, '/jiedan/order', { title: 'DG-待确认已逾期', customer: '乙', amount: 0, ownerId: dg1, deadline: YESTERDAY })
 const oB = r.data.id
 ok('还没接收且已逾期：两行都有', (await bodyOf(dg1)) === '1 个项目等你接收\n1 个项目已逾期', await bodyOf(dg1))
-ok('老板：等员工接收 +1、已逾期 +1', diff(b0, await bossNow()) === only({ toAccept: 1, overdue: 1 }), diff(b0, await bossNow()))
+ok('老板：待接收 +1、已逾期 +1', diff(b0, await bossNow()) === only({ toAccept: 1, overdue: 1 }), diff(b0, await bossNow()))
 ok('dg1 接收', good(await post(t1, `/jiedan/order/${oB}/accept`)))
 ok('接收后只剩“已逾期”（状态是待确认，也算逾期）', (await bodyOf(dg1)) === '1 个项目已逾期', await bodyOf(dg1))
 const bAfterB = await bossNow()
@@ -185,20 +185,20 @@ ok('接收后员工汇总不变（有截止日期、不逾期）', dG0 === dBefo
 r = await request(t1, { orderId: oR, type: 'amount', reason: '客户砍价', payload: { amount: 800 } })
 ok('dg1 提交改价申请', good(r), JSON.stringify(r))
 const ap1 = r.data.id
-ok('员工：还有 1 条申请在等老板批', (await bodyOf(dg1)) === dG0 + '\n你有 1 条申请还在等老板批', await bodyOf(dg1))
+ok('员工：还有 1 条申请在等待审批', (await bodyOf(dg1)) === dG0 + '\n你有 1 条申请还在等待审批', await bodyOf(dg1))
 let bn = await bossNow()
 ok('老板：申请 +1，带“最久的等了多久”', diff(bG0, bn) === only({ appr: 1 }) && bn.hasWait, bn.body)
 ok('另一个员工 dg2 没有汇总', !(await digestOf(dg2)))
-// 把这条申请改成 3 天前提交的（基于它自己的提交时间往前推，避开数据库和 Java 的时区差）
-sql(`update jiedan_approval set create_time = create_time - interval 3 day where id=${ap1}`)
+// 把这条申请改成 3 天前提交的（基于它自己的提交时间往前推，避开数据库和 Java 的时区差；多退 5 秒避开 DATETIME 秒级取整边界）
+sql(`update jiedan_approval set create_time = create_time - interval 3 day - interval 5 second where id=${ap1}`)
 bn = await bossNow()
 ok('老板：最久的已等 3 天（取最老的那条）', bn.wait === Math.max(bG0.wait, 3) && /条申请等你批准（最久的已等 \d+ 天）/.test(bn.body), bn.body)
 ok('老板汇总里申请排在第一行', (await bodyOf(bossId)).split('\n')[0].includes('条申请等你批准'))
 ok('员工的汇总里不显示等了几天', !/最久/.test(await bodyOf(dg1)))
 r = await request(t1, { orderId: oR, type: 'cancel', reason: '先试试' })
 const ap2 = r.data.id
-ok('再提交一条申请：员工 2 条、老板 +2', (await bodyOf(dg1)) === dG0 + '\n你有 2 条申请还在等老板批' && diff(bG0, await bossNow()) === only({ appr: 2 }), await bodyOf(dg1))
-ok('员工撤回一条：员工 1 条、老板 +1', good(await post(t1, `/jiedan/approval/${ap2}/withdraw`)) && (await bodyOf(dg1)) === dG0 + '\n你有 1 条申请还在等老板批' && diff(bG0, await bossNow()) === only({ appr: 1 }))
+ok('再提交一条申请：员工 2 条、老板 +2', (await bodyOf(dg1)) === dG0 + '\n你有 2 条申请还在等待审批' && diff(bG0, await bossNow()) === only({ appr: 2 }), await bodyOf(dg1))
+ok('员工撤回一条：员工 1 条、老板 +1', good(await post(t1, `/jiedan/approval/${ap2}/withdraw`)) && (await bodyOf(dg1)) === dG0 + '\n你有 1 条申请还在等待审批' && diff(bG0, await bossNow()) === only({ appr: 1 }))
 ok('老板驳回：员工和老板的汇总都回到原样', good(await post(boss, `/jiedan/approval/${ap1}/reject`, { note: '不行' })) && (await bodyOf(dg1)) === dG0 && same(bG0, await bossNow()), diff(bG0, await bossNow()))
 ok('已处理的申请回到基线后“最久”也回到基线', (await bossNow()).wait === bG0.wait)
 r = await request(t1, { orderId: oR, type: 'amount', reason: '又来', payload: { amount: 900 } })

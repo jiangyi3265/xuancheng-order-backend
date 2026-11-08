@@ -18,11 +18,14 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
+import com.ruoyi.jiedan.service.NoticeTarget;
 import com.ruoyi.jiedan.domain.JiedanBug;
 import com.ruoyi.jiedan.domain.JiedanBugUpdate;
 import com.ruoyi.jiedan.domain.JiedanOrder;
@@ -33,6 +36,7 @@ import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanApprovalMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugUpdateMapper;
+import com.ruoyi.jiedan.mapper.JiedanMentionMapper;
 import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
 import com.ruoyi.jiedan.mapper.JiedanPaymentMapper;
 import com.ruoyi.jiedan.mapper.JiedanSettingMapper;
@@ -77,6 +81,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private JiedanPushService pushService;
 
     @Autowired
+    private TransactionTemplate transactions;
+
+    @Autowired
     private JiedanAttachmentStorage attachmentStorage;
 
     @Autowired
@@ -87,6 +94,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanAccountMapper accountMapper;
+
+    @Autowired
+    private JiedanMentionMapper mentionMapper;
 
     private static final Map<String, String> PRIORITY_LABELS = new LinkedHashMap<String, String>()
     {{
@@ -115,9 +125,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     public List<Map<String, Object>> listVO()
     {
         List<Map<String, Object>> list = new ArrayList<>();
-        for (Map<String, Object> row : orderMapper.selectAdminSummaries(access.ownerScope()))
+        Map<Long, String> names = new LinkedHashMap<>();
+        for (Map<String, Object> row : orderMapper.selectAdminSummaries(access.ownerScope(), access.currentUserId()))
         {
-            list.add(toAdminListSummaryVO(row));
+            Map<String, Object> vo = toAdminListSummaryVO(row);
+            Long nextOwner = asLong(row.get("nextOwnerId"));
+            // 员工的成员列表里只有自己：下一步交给老板时，名字由这里带过去
+            if (nextOwner != null) vo.put("nextOwnerName", names.computeIfAbsent(nextOwner, this::ownerName));
+            list.add(vo);
         }
         return list;
     }
@@ -166,6 +181,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
             if (!channel.isEmpty() && !channel.equals(asStr(vo.get("channel")))) continue;
             if (!status.isEmpty() && !status.equals(st)) continue;
+            if ("1".equals(q.get("urgentOnly")) && vo.get("urgentUntil") == null) continue;
             if (ownerId != null && !ownerId.equals(asLong(vo.get("ownerId")))) continue;
             // 收款：1=已收清 0=还欠款（报价大于已收） part=收了一部分；“欠款”类不含已取消的项目（取消了就不再追款）
             BigDecimal amt = asDecimal(vo.get("amount"));
@@ -229,10 +245,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        addTimeline(orderId, name, "message", content, jsonStr(attachments), now);
+        Long entryId = addTimeline(orderId, name, "message", content, jsonStr(attachments), now);
         markUnreadForCustomerAction(o, now);
         String brief = strOr(content, "[消息]");
-        pushRecipients(o, null, "💬 客户留言", o.getTitle() + "：" + brief + "（" + name + "）");
+        pushRecipients(o, null, "💬 客户留言", o.getTitle() + "：" + brief + "（" + name + "）", NoticeTarget.timeline(orderId, entryId, "message"));
         return getForCustomer(orderId, account);
     }
 
@@ -260,7 +276,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return insertOrder(p, owner, customerAccount, by, access.currentName(), needAccept);
     }
 
-    /** 客户端提交需求：自动落到该客户归属管理员的名下。 */
+    /** 客户端提交需求：自动落到该客户负责人的名下。 */
     @Override
     @Transactional
     public Map<String, Object> createFromCustomer(Map<String, Object> p, String account)
@@ -347,7 +363,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 BigDecimal curAmt = cur.getAmount() == null ? BigDecimal.ZERO : cur.getAmount();
                 if (asDecimal(p.get("amount")).compareTo(curAmt) != 0)
                 {
-                    throw new ServiceException("改报价要先提交申请，老板批准后才生效");
+                    throw new ServiceException("改报价要先提交申请，审批通过后才生效");
                 }
             }
             String wanted = p.containsKey("status") ? asStr(p.get("status")) : null;
@@ -366,7 +382,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             Long requested = asLong(p.get("ownerId"));
             if (requested != null && !requested.equals(cur.getOwnerId()))
             {
-                if (!boss) throw new ServiceException("下属管理员不能转派项目");
+                if (!boss) throw new ServiceException("当前账号不能转派项目");
                 if (!access.isAssignable(requested)) throw new ServiceException("负责人无效或账号已停用");
                 o.setOwnerId(requested);
                 newOwner = requested;
@@ -385,9 +401,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         List<String> changes = describeChanges(cur, o);
         orderMapper.update(o);
 
-        if (newOwner != null && !newOwner.equals(cur.getOwnerId()) && !newOwner.equals(by))
+        if (newOwner != null && !newOwner.equals(cur.getOwnerId()))
         {
-            pushService.pushToMember(newOwner, "📌 项目已派给你，请接收或拒绝", cur.getTitle() + dash(cur.getCustomer()));
+            retargetNextStep(cur, newOwner);
+            if (!newOwner.equals(by))
+            {
+                pushService.pushToMember(newOwner, "📌 项目已派给你，请接收或拒绝", cur.getTitle() + dash(cur.getCustomer()), id);
+            }
         }
         if (!changes.isEmpty())
         {
@@ -452,7 +472,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public void delete(Long id)
     {
-        if (!access.isBoss()) throw new ServiceException("删除项目要先提交申请，老板批准后才生效");
+        if (!access.isBoss()) throw new ServiceException("删除项目要先提交申请，审批通过后才生效");
         JiedanOrder o = guard(id);
         Long by = access.currentUserId();
         String byName = access.currentName();
@@ -538,6 +558,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByOrderId(id);
         bugMapper.deleteByOrderId(id);
         timelineMapper.deleteByOrderId(id);
+        mentionMapper.deleteByOrderId(id);
         orderMapper.deleteById(id);
     }
 
@@ -551,9 +572,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         Date now = new Date();
-        insertBug(o.getId(), byName, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBug bug = insertBug(o.getId(), byName, asStr(p.get("content")), p.get("attachments"), now);
         touchUnread(o, by, now);
-        pushRecipients(o, by, "新 Bug", o.getTitle() + dash(byName));
+        notifyNewBug(o, bug, by);
         return voOf(o.getId());
     }
 
@@ -567,7 +588,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         touchOrder(o.getId(), new Date());
-        audit.record("bug.delete", "bug", bugId, o.getTitle(), "删除 Bug：" + excerpt(bug.getContent()));
+        audit.record("bug.delete", "bug", bugId, o.getTitle(), "删除问题：" + excerpt(bug.getContent()));
         return voOf(o.getId());
     }
 
@@ -585,7 +606,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Date now = new Date();
         insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
         touchUnread(o, by, now);
-        pushRecipients(o, by, "Bug 追加 QA", o.getTitle() + dash(byName));
+        pushRecipients(o, by, "问题有补充说明", o.getTitle() + dash(byName), NoticeTarget.bug(o.getId(), bugId));
         return voOf(o.getId());
     }
 
@@ -597,13 +618,18 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (bug == null) return null;
         JiedanOrder o = guard(bug.getOrderId());
 
-        String status = normalizeBugStatus(p == null ? null : p.get("status"));
+        boolean needsAction = p != null && "action".equals(p.get("status"));
+        if (needsAction && ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus())))
+            throw new ServiceException("请先重新开启项目，再标记需处理");
+        String status = needsAction ? "action" : normalizeBugStatus(p == null ? null : p.get("status"));
         bugMapper.updateStatus(bugId, status);
 
         Long by = access.currentUserId();
         String byName = access.currentName();
         touchUnread(o, by, new Date());
-        pushRecipients(o, by, "Bug 状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)));
+        if (needsAction && o.getOwnerId() != null && !o.getOwnerId().equals(by))
+            pushService.pushToTarget(o.getOwnerId(), "问题需处理", o.getTitle() + "：" + excerpt(bug.getContent()), NoticeTarget.bug(o.getId(), bugId));
+        else if (!needsAction) pushRecipients(o, by, "问题状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)), NoticeTarget.bug(o.getId(), bugId));
         return voOf(o.getId());
     }
 
@@ -618,11 +644,23 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBug bug = insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
 
         markUnreadForCustomerAction(o, now);
-        pushRecipients(o, null, "客户提交 Bug", o.getTitle() + dash(name));
+        notifyNewBug(o, bug, null);
         return getForCustomer(orderId, account);
+    }
+
+    private void notifyNewBug(JiedanOrder order, JiedanBug bug, Long creatorId)
+    {
+        Set<Long> recipients = new LinkedHashSet<>(recipientIds(order.getOwnerId()));
+        if (creatorId != null) recipients.add(creatorId);
+        String title = (creatorId == null ? "客户反馈问题 #" : "新问题 #") + bug.getId() + " · " + order.getTitle();
+        String summary = excerpt(strOr(bug.getContent(), "请查看问题附件"));
+        String body = "问题：" + summary + "\n创建人：" + bug.getCreatedBy();
+        NoticeTarget target = NoticeTarget.bug(order.getId(), bug.getId());
+        for (Long recipient : recipients)
+            pushService.pushToTarget(recipient, title, body, target);
     }
 
     @Override
@@ -636,7 +674,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         markUnreadForCustomerAction(o, new Date());
-        audit.record("bug.delete", "bug", bugId, o.getTitle(), "客户删除 Bug：" + excerpt(bug.getContent()));
+        audit.record("bug.delete", "bug", bugId, o.getTitle(), "客户删除问题：" + excerpt(bug.getContent()));
         return getForCustomer(o.getId(), account);
     }
 
@@ -655,7 +693,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
 
         markUnreadForCustomerAction(o, now);
-        pushRecipients(o, null, "客户追加 Bug QA", o.getTitle() + dash(name));
+        pushRecipients(o, null, "客户补充了问题说明", o.getTitle() + dash(name), NoticeTarget.bug(o.getId(), bugId));
         return getForCustomer(o.getId(), account);
     }
 
@@ -663,18 +701,31 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> changeBugStatusForCustomer(Long bugId, Map<String, Object> p, String account, String customerName)
     {
-        JiedanBug bug = bugMapper.selectById(bugId);
+        JiedanBug bug = bugMapper.selectCustomerBugForUpdate(bugId, account);
         if (bug == null) return null;
         JiedanOrder o = orderMapper.selectById(bug.getOrderId());
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
 
-        String status = normalizeBugStatus(p == null ? null : p.get("status"));
+        String requested = asStr(p == null ? null : p.get("status"));
+        boolean resolve = "resolved".equals(requested);
+        if (!resolve && !"open".equals(requested) && !"reopen".equals(requested))
+            throw new ServiceException("请选择有效的问题状态");
+
+        // Older clients send "open" when reactivating. Both open and action are
+        // shown as unresolved to customers, so a retry must preserve either state.
+        boolean wasResolved = "resolved".equals(bug.getStatus());
+        if (resolve == wasResolved) return getForCustomer(o.getId(), account);
+        if (!resolve && ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus())))
+            throw new ServiceException("请先重新开启项目，再重新激活问题");
+        String status = resolve ? "resolved" : "action";
         bugMapper.updateStatus(bugId, status);
 
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
         markUnreadForCustomerAction(o, now);
-        pushRecipients(o, null, "客户更新 Bug 状态", o.getTitle() + dash(name) + dash(bugStatusLabel(status)));
+        String title = resolve ? "客户更新了问题状态" : "客户重新激活了问题";
+        String detail = resolve ? bugStatusLabel(status) : excerpt(bug.getContent());
+        pushRecipients(o, null, title, o.getTitle() + dash(name) + dash(detail), NoticeTarget.bug(o.getId(), bugId));
         return getForCustomer(o.getId(), account);
     }
 
@@ -715,12 +766,136 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         String type = strOr(asStr(p.get("type")), "note");
+        String content = asStr(p.get("content"));
+        // 内部记录可以 @ 同事：只能 @ 这个项目的负责人或总管理员（别人本来就看不到这个项目）
+        List<Long> mentioned = new ArrayList<>();
+        Object raw = p.get("mentions");
+        if (raw instanceof List && !((List<?>) raw).isEmpty())
+        {
+            if (!"note".equals(type)) throw new ServiceException("只有内部记录可以 @同事");
+            List<Long> allowed = collaborators(o);
+            for (Object v : (List<?>) raw)
+            {
+                Long m = asLong(v);
+                if (m == null || m.equals(by) || mentioned.contains(m)) continue;
+                if (!allowed.contains(m)) throw new ServiceException("只能 @ 这个项目的负责人或总管理员");
+                mentioned.add(m);
+            }
+        }
         Date now = new Date();
-        addTimeline(o.getId(), byName, type, asStr(p.get("content")), jsonStr(p.get("attachments")), now);
+        Long timelineId = addTimeline(o.getId(), byName, type, content, jsonStr(p.get("attachments")), now);
+        for (Long m : mentioned)
+        {
+            mentionMapper.insert(o.getId(), timelineId, m, by, byName, excerpt(content), now);
+        }
         touchUnread(o, by, now);
-        pushRecipients(o, by, "💬 新动态",
-                o.getTitle() + "：" + strOr(asStr(p.get("content")), "有新进度") + "（" + byName + "）");
+        String text = strOr(content, "有新进度");
+        NoticeTarget target = NoticeTarget.timeline(o.getId(), timelineId, type);
+        for (Long m : othersThan(o.getOwnerId(), by))
+        {
+            if (mentioned.contains(m))
+                pushService.pushToTarget(m, "💬 " + byName + " @了你", o.getTitle() + "：" + text, target);
+            else
+                pushService.pushToTarget(m, "💬 新动态", o.getTitle() + "：" + text + "（" + byName + "）", target);
+        }
         return voOf(o.getId());
+    }
+
+    // ---------- 下一步：做什么 / 谁来做 / 哪天前 ----------
+    @Override
+    @Transactional
+    public Map<String, Object> setNextStep(Long id, Map<String, Object> p)
+    {
+        JiedanOrder o = guard(id);
+        Long by = access.currentUserId();
+        String byName = access.currentName();
+        Date now = new Date();
+        String content = asStr(p.get("content"));
+        content = content == null ? "" : content.trim();
+        if (content.isEmpty())
+        {
+            if (StringUtils.isEmpty(o.getNextStep())) return voOf(id);
+            orderMapper.updateNextStep(id, null, null, null, now);
+            addTimeline(id, byName, "note", byName + " 清除了下一步：" + o.getNextStep(), null, now);
+            touchUnread(o, by, now);
+            audit.record("order.next", "order", id, o.getTitle(), "清除下一步：" + o.getNextStep());
+            return voOf(id);
+        }
+        applyNextStep(o, content, asLong(p.get("ownerId")), asStr(p.get("due")), by, byName, now, null);
+        return voOf(id);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> completeNextStep(Long id, Map<String, Object> p)
+    {
+        JiedanOrder o = guard(id);
+        if (StringUtils.isEmpty(o.getNextStep())) throw new ServiceException("这个项目还没有下一步");
+        Long by = access.currentUserId();
+        String byName = access.currentName();
+        Date now = new Date();
+        String done = o.getNextStep();
+        addTimeline(id, byName, "note", byName + " 完成了下一步：" + done, null, now);
+        audit.record("order.next.done", "order", id, o.getTitle(), "完成下一步：" + done);
+        String content = asStr(p == null ? null : p.get("content"));
+        content = content == null ? "" : content.trim();
+        if (content.isEmpty())
+        {
+            orderMapper.updateNextStep(id, null, null, null, now);
+            touchUnread(o, by, now);
+            pushRecipients(o, by, "✅ 下一步已完成", o.getTitle() + "：" + done + "（" + byName + "）");
+            return voOf(id);
+        }
+        // 完成后接着安排下一个
+        applyNextStep(o, content, asLong(p.get("ownerId")), asStr(p.get("due")), by, byName, now, done);
+        return voOf(id);
+    }
+
+    private void applyNextStep(JiedanOrder o, String content, Long nextOwner, String due, Long by, String byName, Date now, String justDone)
+    {
+        if (content.length() > 200) throw new ServiceException("下一步不能超过 200 字");
+        if (nextOwner == null) nextOwner = o.getOwnerId();
+        if (nextOwner == null || !collaborators(o).contains(nextOwner)) throw new ServiceException("下一步只能交给项目负责人或总管理员");
+        due = due == null ? "" : due.trim();
+        if (!due.isEmpty())
+        {
+            try { LocalDate.parse(due); }
+            catch (Exception e) { throw new ServiceException("截止日期格式不正确"); }
+        }
+        orderMapper.updateNextStep(o.getId(), content, nextOwner, due.isEmpty() ? null : due, now);
+        String who = ownerName(nextOwner);
+        String dueText = due.isEmpty() ? "" : " · " + due + " 前";
+        addTimeline(o.getId(), byName, "note", byName + " 设置下一步：" + content + "（" + who + dueText + "）", null, now);
+        touchUnread(o, by, now);
+        audit.record("order.next", "order", o.getId(), o.getTitle(), "下一步：" + content + "；负责人：" + who + (due.isEmpty() ? "" : "；截止：" + due));
+        String doneText = justDone == null ? "" : "（已完成：" + justDone + "）";
+        for (Long m : othersThan(o.getOwnerId(), by))
+        {
+            if (m.equals(nextOwner))
+                pushService.pushToMember(m, "📍 下一步交给你", o.getTitle() + "：" + content + (due.isEmpty() ? "" : "（" + due + " 前）") + " —— " + byName + doneText, o.getId());
+            else if (justDone != null)
+                pushService.pushToMember(m, "✅ 下一步已完成", o.getTitle() + "：" + justDone + "（" + byName + "）", o.getId());
+        }
+    }
+
+    /** 能被 @、能接下一步的人：项目负责人 + 全体总管理员（账号在用的） */
+    private List<Long> collaborators(JiedanOrder o)
+    {
+        List<Long> list = new ArrayList<>();
+        for (Long m : recipientIds(o.getOwnerId()))
+        {
+            if (access.isAssignable(m)) list.add(m);
+        }
+        return list;
+    }
+
+    /** 项目换了负责人：原来交给旧负责人的下一步跟着交给新负责人（交给老板的不动） */
+    private void retargetNextStep(JiedanOrder cur, Long newOwner)
+    {
+        Long nextOwner = cur.getNextOwnerId();
+        if (nextOwner == null || newOwner == null || StringUtils.isEmpty(cur.getNextStep())) return;
+        if (!nextOwner.equals(cur.getOwnerId()) || access.bossUserIds().contains(nextOwner)) return;
+        orderMapper.updateNextStep(cur.getId(), cur.getNextStep(), newOwner, cur.getNextDue(), new Date());
     }
 
     // ---------- 改状态 ----------
@@ -749,6 +924,54 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return voOf(o.getId());
     }
 
+    @Override
+    @Transactional
+    public Map<String, Object> setHandling(Long id, Map<String, Object> payload)
+    {
+        // Read the latest state and check ownership under the same lock as the write.
+        JiedanOrder current = orderMapper.selectScopedForUpdate(id, access.ownerScope());
+        if (current == null) throw new ServiceException(JiedanAccess.DENIED);
+        Object mark = payload == null ? null : payload.get("handled");
+        Object expected = payload == null ? null : payload.get("version");
+        if (!(mark instanceof Boolean) || !(expected instanceof Integer || expected instanceof Long)
+                || ((Number) expected).longValue() < 0)
+            throw new ServiceException("请选择有效的处理状态并刷新项目版本");
+        if (mark.equals(current.getHandled()) && current.getHandledTime() != null) return toVO(current, true);
+        if (!Objects.equals(current.getVersion(), ((Number) expected).longValue()))
+            throw new ServiceException("项目已更新，请刷新后重新标记", 409);
+        orderMapper.updateHandling(id, (Boolean) mark, new Date());
+        return voOf(id);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> setUrgency(Long id, Map<String, Object> payload)
+    {
+        JiedanOrder current = orderMapper.selectScopedForUpdate(id, access.ownerScope());
+        if (current == null) throw new ServiceException(JiedanAccess.DENIED);
+        if (!access.isBoss() && "pending".equals(current.getAssignState()))
+            throw new ServiceException("请先接收项目，再设置加急日期");
+        if (!payload.containsKey("urgentUntil") || !payload.containsKey("previousUntil"))
+            throw new ServiceException("请重新打开加急设置并选择日期");
+
+        Object value = payload.get("urgentUntil");
+        if (value != null)
+        {
+            if (!(value instanceof String) || !((String) value).matches("[1-9][0-9]{3}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}"))
+                throw new ServiceException("请选择有效的加急截止时间");
+            try { java.time.LocalDateTime.parse(((String) value).replace(' ', 'T')); }
+            catch (java.time.format.DateTimeParseException e) { throw new ServiceException("请选择有效的加急截止时间"); }
+        }
+        String date = (String) value;
+        if (Objects.equals(date, current.getUrgentUntil())) return toVO(current, true);
+        if (!Objects.equals(payload.get("previousUntil"), current.getUrgentUntil()))
+            throw new ServiceException("加急日期已被修改，请核对最新日期后重试", 409);
+
+        orderMapper.updateUrgentUntil(id, date);
+        audit.record("order.update", "order", id, current.getTitle(), date == null ? "取消加急" : "加急至 " + date);
+        return voOf(id);
+    }
+
     // ---------- 标记已读（只能标记自己的） ----------
     @Override
     public Map<String, Object> markRead(Long id, Long memberId)
@@ -756,12 +979,18 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         JiedanOrder o = guard(id);
         Long me = access.currentUserId();
         List<Long> unread = parseUnread(o.getUnread());
+        // 打开项目 = 看过了这里所有 @我 的记录：对方能看到“已读”
+        int seenMentions = mentionMapper.markRead(id, me, new Date());
         if (unread.remove(me))
         {
             JiedanOrder upd = new JiedanOrder();
             upd.setId(id);
             upd.setUnread(join(unread));
             orderMapper.update(upd);
+        }
+        else if (seenMentions > 0)
+        {
+            orderMapper.bumpVersion(id);
         }
         return getVersion(id);
     }
@@ -788,14 +1017,26 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     // ---------- 催一下 ----------
     @Override
+    @Transactional
     public Map<String, Object> nudge(Map<String, Object> p)
     {
-        JiedanOrder o = guard(asLong(p.get("id")));
+        JiedanOrder o = orderMapper.selectScopedForUpdate(asLong(p.get("id")), access.ownerScope());
+        if (o == null) throw new ServiceException(JiedanAccess.DENIED);
+        boolean urgent = "urgent".equals(p.get("kind"));
         Long by = access.currentUserId();
         String byName = access.currentName();
         Date now = new Date();
         // 催谁：优先催负责人；若自己就是负责人则催总管理员
         Long target = o.getOwnerId();
+        if (urgent)
+        {
+            if (target == null || target.equals(by)) throw new ServiceException("请选择其他负责人名下的项目");
+            if (o.getUrgentUntil() == null || Boolean.TRUE.equals(o.getHandled())
+                    || "done".equals(o.getStatus()) || "cancelled".equals(o.getStatus()))
+                throw new ServiceException("这个项目当前无需加急提醒");
+            if (!Objects.equals(o.getVersion(), asLong(p.get("version"))))
+                throw new ServiceException("项目信息已更新，请核对后再提醒", 409);
+        }
         if (target == null || target.equals(by))
         {
             target = null;
@@ -808,7 +1049,19 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 }
             }
         }
-        addTimeline(o.getId(), byName, "note", byName + " 催了一下：" + o.getTitle(), null, now);
+        String reminder = urgent ? "请跟进「" + o.getTitle() + "」，加急截止 " + o.getUrgentUntil() + "（北京时间）" : byName + " 催了一下：" + o.getTitle();
+        recordReminder(o, target, byName, reminder, now);
+        if (target != null)
+        {
+            if (urgent) pushService.pushToMember(target, "加急提醒 · " + o.getTitle(), byName + "：" + reminder, o.getId());
+            else pushService.pushToMember(target, "⏰ 催办", o.getTitle() + " —— " + byName + " 催你跟进", o.getId());
+        }
+        return voOf(o.getId());
+    }
+
+    private void recordReminder(JiedanOrder o, Long target, String byName, String reminder, Date now)
+    {
+        addTimeline(o.getId(), byName, "note", reminder, null, now);
         // 催办标记为目标未读
         if (target != null)
         {
@@ -819,9 +1072,74 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             upd.setUnread(join(unread));
             upd.setUpdateTime(now);
             orderMapper.update(upd);
-            pushService.pushToMember(target, "⏰ 催办", o.getTitle() + " —— " + byName + " 催你跟进");
         }
-        return voOf(o.getId());
+    }
+
+    @Override
+    public void remindPendingItem(Long id, Map<String, Object> payload)
+    {
+        Runnable deliver = transactions.execute(status -> preparePendingReminder(id, payload));
+        deliver.run();
+    }
+
+    private Runnable preparePendingReminder(Long id, Map<String, Object> payload)
+    {
+        JiedanOrder order = orderMapper.selectScopedForUpdate(id, access.ownerScope());
+        if (order == null) throw new ServiceException(JiedanAccess.DENIED);
+        if ("done".equals(order.getStatus()) || "cancelled".equals(order.getStatus()))
+            throw new ServiceException("项目已结束，无需提醒");
+        Object version = payload.get("version");
+        if (!(version instanceof Integer || version instanceof Long)
+                || !Objects.equals(order.getVersion(), ((Number) version).longValue()))
+            throw new ServiceException("项目已更新，请核对最新待处理事项后再提醒", 409);
+
+        Long recipient = order.getOwnerId();
+        NoticeTarget target = NoticeTarget.order(id);
+        String detail;
+        switch (Objects.toString(payload.get("kind"), ""))
+        {
+            case "urgent":
+                if (order.getUrgentUntil() == null || Boolean.TRUE.equals(order.getHandled()))
+                    throw new ServiceException("这条加急事项已经移出待处理");
+                detail = "加急截止 " + order.getUrgentUntil() + "（北京时间）";
+                break;
+            case "manual":
+                if (Boolean.TRUE.equals(order.getHandled()) || order.getHandledTime() == null)
+                    throw new ServiceException("这个项目当前没有手动标记为未处理");
+                detail = "项目已标为未处理，请跟进并更新处理状态";
+                target = NoticeTarget.handling(id);
+                break;
+            case "next":
+                if (order.getNextStep() == null || order.getNextStep().trim().isEmpty())
+                    throw new ServiceException("这条下一步已经移出待处理");
+                if (order.getNextOwnerId() != null) recipient = order.getNextOwnerId();
+                detail = "下一步：" + order.getNextStep()
+                        + (order.getNextDue() == null ? "" : " · 截止 " + order.getNextDue());
+                break;
+            case "bug":
+                Object bugId = payload.get("bugId");
+                if (bugId != null && (!(bugId instanceof Integer || bugId instanceof Long) || ((Number) bugId).longValue() <= 0))
+                    throw new ServiceException("问题编号无效，请刷新后重试");
+                List<JiedanBug> bugs = bugMapper.selectActionForReminder(id, bugId == null ? null : ((Number) bugId).longValue());
+                if (bugs.isEmpty()) throw new ServiceException("这个问题已移出待处理，请核对最新列表");
+                if (bugs.size() == 1) {
+                    JiedanBug bug = bugs.get(0);
+                    detail = "问题 #" + bug.getId() + "：" + excerpt(strOr(bug.getContent(), "请查看问题附件"));
+                    target = NoticeTarget.bug(id, bug.getId());
+                } else {
+                    detail = "请跟进项目中标记为需处理的问题";
+                    target = NoticeTarget.pendingBugs(id);
+                }
+                break;
+            default:
+                throw new ServiceException("请选择有效的待处理事项");
+        }
+        if (recipient == null || !collaborators(order).contains(recipient))
+            throw new ServiceException("请先为这条事项指定有效的负责人");
+        String sender = access.currentName();
+        Runnable deliver = pushService.prepareWecomReminder(recipient, "待处理提醒 · " + order.getTitle(), sender + " 提醒你：" + detail, target);
+        recordReminder(order, recipient, sender, "向" + ownerName(recipient) + "发起微信提醒：" + detail, new Date());
+        return deliver;
     }
 
     // ---------- 推送设置 ----------
@@ -830,31 +1148,72 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         boolean boss = access.isBoss();
         String mine = sendKeyOf(access.currentUserId());
+        String myWecom = WECOM_USER + access.currentUserId();
         Map<String, String> cfg = new LinkedHashMap<>();
         for (JiedanSetting s : settingMapper.selectAll())
         {
             String key = s.getSettingKey();
-            // 下属管理员看不到别人的 SendKey
-            if (boss || !key.startsWith("push.sendkey.") || key.equals(mine))
+            String value = s.getSettingValue();
+            if (!boss)
             {
-                cfg.put(key, s.getSettingValue());
+                // 下属管理员看不到别人的 SendKey / 企业微信账号，也看不到企业微信应用的配置
+                if (key.startsWith("push.sendkey.") && !key.equals(mine)) continue;
+                if (key.startsWith("push.wecom.") && !key.equals(myWecom)) continue;
             }
+            // Secret 和 EncodingAESKey 只告诉“已填”，不回传原文
+            if (SECRET_KEYS.contains(key) && value != null && !value.isEmpty()) value = MASK;
+            cfg.put(key, value);
         }
         if (!boss && !cfg.containsKey(mine)) cfg.put(mine, "");
+        if (!boss && !cfg.containsKey(myWecom)) cfg.put(myWecom, "");
         return cfg;
     }
+
+    private static final String WECOM_USER = "push.wecom.user.";
+    private static final String MASK = "********";
+    private static final List<String> SECRET_KEYS = Arrays.asList("push.wecom.secret", "push.wecom.aesKey");
 
     @Override
     public void savePushConfig(Map<String, Object> p)
     {
         boolean boss = access.isBoss();
         String mine = sendKeyOf(access.currentUserId());
+        String myWecom = WECOM_USER + access.currentUserId();
         for (Map.Entry<String, Object> e : p.entrySet())
         {
             if (e.getKey() == null || !e.getKey().startsWith("push.")) continue;
-            if (!boss && !e.getKey().equals(mine)) throw new ServiceException("无权修改该推送设置");
-            settingMapper.upsert(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
+            if (!boss && !e.getKey().equals(mine) && !e.getKey().equals(myWecom)) throw new ServiceException("无权修改该推送设置");
+            String v = e.getValue() == null ? "" : e.getValue().toString().trim();
+            // 页面上显示的是遮住的 Secret：原样传回来表示“不改”
+            if (SECRET_KEYS.contains(e.getKey()) && MASK.equals(v)) continue;
+            checkWecomSetting(e.getKey(), v);
+            if ("push.siteUrl".equals(e.getKey()))
+            {
+                // 推送里“打开项目”链接的前缀，例如 https://jiedanxt.oksja.cn
+                if (!v.isEmpty() && !v.matches("https?://[^\\s]+")) throw new ServiceException("系统网址需以 http:// 或 https:// 开头");
+                v = v.replaceAll("/+$", "");
+            }
+            if ("push.stallDays".equals(e.getKey()))
+            {
+                int n;
+                try { n = Integer.parseInt(v); } catch (Exception ex) { throw new ServiceException("停滞提醒天数需为 1-60 的整数"); }
+                if (n < 1 || n > 60) throw new ServiceException("停滞提醒天数需为 1-60 的整数");
+            }
+            settingMapper.upsert(e.getKey(), v);
         }
+    }
+
+    /** 企业微信几项设置的格式校验（填错了推送会一直失败，不如保存时就说清楚） */
+    private void checkWecomSetting(String key, String v)
+    {
+        if (v.isEmpty() || !key.startsWith("push.wecom.")) return;
+        if ("push.wecom.corpId".equals(key) && !v.matches("[A-Za-z0-9]{6,64}")) throw new ServiceException("企业 ID 格式不对（一般是 ww 开头的一串字母数字）");
+        if ("push.wecom.agentId".equals(key) && !v.matches("\\d{1,12}")) throw new ServiceException("AgentId 应该是一串数字");
+        if ("push.wecom.secret".equals(key) && !v.matches("[A-Za-z0-9_\\-]{8,128}")) throw new ServiceException("Secret 格式不对，请从应用详情里重新复制");
+        if ("push.wecom.token".equals(key) && !v.matches("[A-Za-z0-9]{1,32}")) throw new ServiceException("Token 只能是 32 位以内的字母和数字");
+        if ("push.wecom.aesKey".equals(key) && !v.matches("[A-Za-z0-9]{43}")) throw new ServiceException("EncodingAESKey 应该是 43 位字母和数字");
+        if ((key.startsWith(WECOM_USER) || key.startsWith("push.wecom.quoteCopy.")) && "@all".equalsIgnoreCase(v)) throw new ServiceException("请选择个人企业微信账号");
+        if ((key.startsWith(WECOM_USER) || key.startsWith("push.wecom.quoteCopy.")) && !v.matches("[A-Za-z0-9_.@\\-]{1,64}")) throw new ServiceException("企业微信账号格式不对（通讯录里成员详情的「账号」）");
     }
 
     @Override
@@ -887,7 +1246,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             else continue;
             pushService.pushToMember(o.getOwnerId(),
                     "⏰ 截止提醒 · " + tip,
-                    o.getTitle() + dash(o.getCustomer()) + " 截止 " + dl);
+                    o.getTitle() + dash(o.getCustomer()) + " 截止 " + dl, o.getId());
             count++;
         }
         return count;
@@ -901,7 +1260,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> addPayment(Long orderId, Map<String, Object> p)
     {
-        if (!access.isBoss()) throw new ServiceException("收款要先提交申请，老板确认后才入账");
+        if (!access.isBoss()) throw new ServiceException("收款要先提交申请，确认后才入账");
         return addPaymentAs(orderId, p, null);
     }
 
@@ -938,7 +1297,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> deletePayment(Long paymentId)
     {
-        if (!access.isBoss()) throw new ServiceException("删除收款记录只有老板可以操作");
+        if (!access.isBoss()) throw new ServiceException("当前账号无权删除收款记录");
         JiedanPayment pay = paymentId == null ? null : paymentMapper.selectById(paymentId);
         if (pay == null) throw new ServiceException("这笔收款不存在");
         JiedanOrder o = guard(pay.getOrderId());
@@ -1069,7 +1428,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         if ("pending".equals(o.getAssignState()))
         {
-            throw new ServiceException("老板刚把这个项目派给你，请先点“接收”（或“拒绝”）再继续");
+            throw new ServiceException("项目已分配给你，请先点“接收”（或“拒绝”）再继续");
         }
     }
 
@@ -1077,8 +1436,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private void staffStatusGate(JiedanOrder o, String status)
     {
         requireAccepted(o);
-        if ("done".equals(status)) throw new ServiceException("请点“提交验收”，由老板验收后才算完成");
-        if ("cancelled".equals(status)) throw new ServiceException("取消项目要先提交申请，老板批准后才生效");
+        if ("done".equals(status)) throw new ServiceException("请点“提交验收”，验收通过后才算完成");
+        if ("cancelled".equals(status)) throw new ServiceException("取消项目要先提交申请，审批通过后才生效");
     }
 
     /** 员工接收老板派来的项目。 */
@@ -1098,7 +1457,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         orderMapper.update(upd);
         addTimeline(id, name, "note", name + " 接收了这个项目", null, now);
         touchUnread(o, me, now);
-        audit.record("order.accept", "order", id, o.getTitle(), "接收了老板派来的项目");
+        audit.record("order.accept", "order", id, o.getTitle(), "接收了项目");
         pushRecipients(o, me, "✅ 已接收", o.getTitle() + "（" + name + "）");
         return voOf(id);
     }
@@ -1113,7 +1472,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         {
             throw new ServiceException("只有刚派给你、还没接收的项目才能拒绝");
         }
-        return giveBack(o, reason, "order.reject", "拒绝了老板派来的项目", "🙅 已拒绝");
+        return giveBack(o, reason, "order.reject", "拒绝了项目", "🙅 已拒绝");
     }
 
     /** 员工把做到一半的项目交回老板：回到老板名下并变成“待确认”，必须写原因。 */
@@ -1127,14 +1486,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         {
             throw new ServiceException("已完成或已取消的项目不能交回");
         }
-        return giveBack(o, reason, "order.handback", "把项目交回给老板", "↩️ 已交回");
+        return giveBack(o, reason, "order.handback", "交回项目", "↩️ 已交回");
     }
 
     private Map<String, Object> giveBack(JiedanOrder o, String reason, String action, String verb, String pushTitle)
     {
         String why = requireReason(reason);
         List<Long> bosses = access.bossUserIds();
-        if (bosses.isEmpty()) throw new ServiceException("找不到老板账号，请联系管理员");
+        if (bosses.isEmpty()) throw new ServiceException("未找到接收账号，请联系项目发起人");
         Long boss = bosses.get(0);
         Long me = access.currentUserId();
         String name = access.currentName();
@@ -1148,12 +1507,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUnread(join(othersThan(boss, me)));
         upd.setUpdateTime(now);
         orderMapper.update(upd);
+        retargetNextStep(o, boss);
 
         addTimeline(o.getId(), name, "note", name + " " + verb + "：" + why, null, now);
         audit.record(action, "order", o.getId(), o.getTitle(), "原因：" + why);
         for (Long m : othersThan(boss, me))
         {
-            pushService.pushToMember(m, pushTitle, o.getTitle() + "（" + name + "）：" + why);
+            pushService.pushToMember(m, pushTitle, o.getTitle() + "（" + name + "）：" + why, o.getId());
         }
         // 交回之后员工就看不到这个项目了，只回一个最小的结果
         Map<String, Object> vo = new LinkedHashMap<>();
@@ -1244,9 +1604,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     private void pushRecipients(JiedanOrder o, Long by, String title, String content)
     {
+        pushRecipients(o, by, title, content, NoticeTarget.order(o.getId()));
+    }
+
+    private void pushRecipients(JiedanOrder o, Long by, String title, String content, NoticeTarget target)
+    {
         for (Long m : othersThan(o.getOwnerId(), by))
         {
-            pushService.pushToMember(m, title, content);
+            pushService.pushToTarget(m, title, content, target);
         }
     }
 
@@ -1285,7 +1650,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return t.length() <= 60 ? t : t.substring(0, 60) + "…";
     }
 
-    private void addTimeline(Long orderId, String user, String type, String content, String attachments, Date time)
+    private Long addTimeline(Long orderId, String user, String type, String content, String attachments, Date time)
     {
         JiedanTimeline t = new JiedanTimeline();
         t.setOrderId(orderId);
@@ -1295,6 +1660,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         t.setAttachments(attachments);
         t.setCreateTime(time);
         timelineMapper.insert(t);
+        return t.getId();
     }
 
     private JiedanBug insertBug(Long orderId, String user, String content, Object attachments, Date time)
@@ -1360,7 +1726,16 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("version", o.getVersion() == null ? 0 : o.getVersion());
         vo.put("createTime", fmt(o.getCreateTime()));
         vo.put("updateTime", fmt(o.getUpdateTime()));
-        vo.put("attachments", normalizedAttachments(o.getAttachments(), "order", o.getId()));
+        JSONArray files = normalizedAttachments(o.getAttachments(), "order", o.getId());
+        vo.put("attachments", files);
+        vo.put("coverUrl", files.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                .filter(item -> {
+                    String url = Objects.toString(item.get("url"), "");
+                    String kind = Objects.toString(item.get("type"), "");
+                    return url.startsWith("data:image/") || ((url.startsWith("/") && !url.startsWith("//") && !url.contains("\\"))
+                            && ("image".equals(kind) || kind.startsWith("image/") || url.matches("(?i).*\\.(png|jpe?g|gif|webp|bmp|avif|svg)$")));
+                })
+                .map(item -> item.get("url")).findFirst().orElse(null));
         vo.put("unread", parseUnread(o.getUnread()));
         if (includeInternal)
         {
@@ -1379,7 +1754,27 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 pm.put("createTime", fmt(pay.getCreateTime()));
                 payments.add(pm);
             }
+            vo.put("handled", Boolean.TRUE.equals(o.getHandled()));
+            vo.put("handledTime", o.getHandledTime());
+            vo.put("urgentUntil", o.getUrgentUntil());
             vo.put("payments", payments);
+            vo.put("nextStep", o.getNextStep());
+            vo.put("nextOwnerId", o.getNextOwnerId());
+            vo.put("nextOwnerName", o.getNextOwnerId() == null ? null : ownerName(o.getNextOwnerId()));
+            vo.put("nextDue", o.getNextDue());
+            // 这个项目里能 @、能接下一步的人（负责人 + 总管理员）
+            Set<Long> bossSet = new LinkedHashSet<>(access.bossUserIds());
+            List<Map<String, Object>> people = new ArrayList<>();
+            for (Long m : collaborators(o))
+            {
+                Map<String, Object> pm = new LinkedHashMap<>();
+                pm.put("id", m);
+                pm.put("name", ownerName(m));
+                pm.put("boss", bossSet.contains(m));
+                pm.put("owner", m.equals(o.getOwnerId()));
+                people.add(pm);
+            }
+            vo.put("collaborators", people);
         }
 
         Map<Long, List<JiedanBugUpdate>> updatesByBug = new LinkedHashMap<>();
@@ -1396,7 +1791,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("orderId", b.getOrderId());
             bm.put("content", b.getContent());
             bm.put("attachments", normalizedAttachments(b.getAttachments(), "bug", b.getId()));
-            bm.put("status", normalizeBugStatus(b.getStatus()));
+            bm.put("status", includeInternal && "action".equals(b.getStatus()) ? "action" : normalizeBugStatus(b.getStatus()));
             bm.put("createdBy", displayMemberName(b.getCreatedBy()));
             bm.put("time", fmt(b.getCreateTime()));
 
@@ -1416,7 +1811,37 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bugs.add(bm);
         }
         vo.put("bugs", bugs);
+        if (includeInternal)
+        {
+            List<Map<String, Object>> previews = new ArrayList<>();
+            for (Map<String, Object> bug : bugs)
+            {
+                if (!"action".equals(bug.get("status"))) continue;
+                String text = Objects.toString(bug.get("content"), "");
+                int length = Math.min(120, text.codePointCount(0, text.length()));
+                previews.add(Map.of("id", bug.get("id"), "content", text.substring(0, text.offsetByCodePoints(0, length))));
+            }
+            vo.put("actionBugCount", previews.size());
+            vo.put("actionBugPreviews", previews);
+        }
 
+        // 内部记录上的 @：谁被 @、看没看过（只给后台成员看）
+        Map<Long, List<Map<String, Object>>> mentionsByTimeline = new LinkedHashMap<>();
+        if (includeInternal)
+        {
+            Map<Long, String> names = new LinkedHashMap<>();
+            for (Map<String, Object> m : mentionMapper.selectByOrderId(o.getId()))
+            {
+                Long tid = asLong(m.get("timelineId"));
+                Long mid = asLong(m.get("memberId"));
+                if (tid == null || mid == null) continue;
+                Map<String, Object> mv = new LinkedHashMap<>();
+                mv.put("memberId", mid);
+                mv.put("name", names.computeIfAbsent(mid, this::ownerName));
+                mv.put("read", m.get("readTime") != null);
+                mentionsByTimeline.computeIfAbsent(tid, k -> new ArrayList<>()).add(mv);
+            }
+        }
         List<Map<String, Object>> tl = new ArrayList<>();
         for (JiedanTimeline t : timelineMapper.selectByOrderId(o.getId()))
         {
@@ -1428,6 +1853,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             tm.put("type", t.getType());
             tm.put("content", t.getContent());
             tm.put("attachments", normalizedAttachments(t.getAttachments(), "timeline", t.getId()));
+            List<Map<String, Object>> ms = mentionsByTimeline.get(t.getId());
+            if (ms != null) tm.put("mentions", ms);
             tl.add(tm);
         }
         vo.put("timeline", tl);
@@ -1449,6 +1876,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("priority", row.get("priority"));
         vo.put("deadline", row.get("deadline"));
         vo.put("requirement", row.get("requirement"));
+        vo.put("coverUrl", row.get("coverUrl"));
         vo.put("paid", asBool(row.get("paid")));
         vo.put("revisions", row.get("revisions") == null ? 0 : row.get("revisions"));
         vo.put("version", row.get("version") == null ? 0 : row.get("version"));
@@ -1473,13 +1901,44 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private Map<String, Object> toAdminListSummaryVO(Map<String, Object> row)
     {
         Map<String, Object> vo = toListSummaryVO(row);
+        vo.put("handled", asBool(row.get("handled")));
+        vo.put("handledTime", row.get("handledTime"));
+        vo.put("urgentUntil", row.get("urgentUntil"));
         vo.put("contact", row.get("contact"));
         vo.put("receivedAmount", asDecimal(row.get("receivedAmount")));
         vo.put("assignState", strOr(asStr(row.get("assignState")), ""));
         vo.put("pendingApprovals", row.get("pendingApprovals") == null ? 0 : row.get("pendingApprovals"));
         vo.put("unread", parseUnread(asStr(row.get("unread"))));
         vo.put("attachmentCount", row.get("attachmentCount") == null ? 0 : row.get("attachmentCount"));
+        vo.put("actionBugCount", row.get("actionBugCount"));
+        String previews = asStr(row.get("actionBugPreviews"));
+        vo.put("actionBugPreviews", previews == null ? new JSONArray() : JSON.parseArray(previews));
+        vo.put("lastBugId", row.get("lastBugId"));
+        vo.put("lastMessageId", row.get("lastMessageId"));
+        if ("1".equals(String.valueOf(row.get("actionBugCount")))) vo.put("actionBugId", row.get("actionBugId"));
         vo.put("bugCount", row.get("bugCount") == null ? 0 : row.get("bugCount"));
+        vo.put("nextStep", row.get("nextStep"));
+        vo.put("nextOwnerId", row.get("nextOwnerId"));
+        vo.put("nextDue", row.get("nextDue"));
+        if (row.get("mentionTime") != null)
+        {
+            Map<String, Object> mention = new LinkedHashMap<>();
+            mention.put("from", displayMemberName(asStr(row.get("mentionFrom"))));
+            mention.put("content", row.get("mentionContent"));
+            mention.put("time", fmtIfDate(row.get("mentionTime")));
+            vo.put("myMention", mention);
+        }
+        // 最近一条动态：消息中心直接写出「谁做了什么」（只给内部列表，客户端列表不带）
+        String eventType = asStr(row.get("lastEventType"));
+        if (eventType != null && !eventType.trim().isEmpty())
+        {
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("type", eventType);
+            event.put("user", displayMemberName(asStr(row.get("lastEventUser"))));
+            event.put("content", excerpt(asStr(row.get("lastEventContent"))));
+            event.put("time", fmtIfDate(row.get("lastEventTime")));
+            vo.put("lastEvent", event);
+        }
         return vo;
     }
 
@@ -1492,7 +1951,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return vo;
     }
 
-    private Object normalizedAttachments(String json, String ownerType, Long ownerId)
+    private JSONArray normalizedAttachments(String json, String ownerType, Long ownerId)
     {
         JiedanAttachmentStorage.NormalizedAttachments normalized = attachmentStorage.normalize(json);
         if (normalized.isChanged())

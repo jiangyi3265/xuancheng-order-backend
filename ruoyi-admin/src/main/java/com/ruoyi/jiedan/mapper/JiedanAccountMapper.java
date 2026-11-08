@@ -13,6 +13,8 @@ public interface JiedanAccountMapper
     /** 所有有效的总管理员账号 id */
     List<Long> selectBossUserIds();
 
+    Long selectDefaultQuoteEmployeeId();
+
     /** 账号归属：下属 -> 上级，客户 -> 负责管理员；没有记录返回 null */
     Long selectOwnerOf(Long userId);
 

@@ -56,7 +56,7 @@ public class JiedanAccess
 
     public void requireBoss()
     {
-        if (!isBoss()) throw new ServiceException("仅总管理员可操作");
+        if (!isBoss()) throw new ServiceException("当前账号无权执行此操作");
     }
 
     /** 列表查询的负责人范围：总管理员不限（null），其他人只限自己。 */

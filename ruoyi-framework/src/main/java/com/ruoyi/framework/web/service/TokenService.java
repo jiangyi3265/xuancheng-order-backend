@@ -62,7 +62,11 @@ public class TokenService
     public LoginUser getLoginUser(HttpServletRequest request)
     {
         // 获取请求携带的令牌
-        String token = getToken(request);
+        return resolveToken(getToken(request));
+    }
+
+    public LoginUser resolveToken(String token)
+    {
         if (StringUtils.isNotEmpty(token))
         {
             try
@@ -72,6 +76,8 @@ public class TokenService
                 String uuid = (String) claims.get(Constants.LOGIN_USER_KEY);
                 String userKey = getTokenKey(uuid);
                 LoginUser user = redisCache.getCacheObject(userKey);
+                if (user != null && user.getRememberedUntil() != null && user.getRememberedUntil() <= System.currentTimeMillis())
+                    return null;
                 return user;
             }
             catch (Exception e)
@@ -148,10 +154,14 @@ public class TokenService
     public void refreshToken(LoginUser loginUser)
     {
         loginUser.setLoginTime(System.currentTimeMillis());
-        loginUser.setExpireTime(loginUser.getLoginTime() + expireTime * MILLIS_MINUTE);
+        long expiry = loginUser.getRememberedUntil() == null
+                ? loginUser.getLoginTime() + expireTime * MILLIS_MINUTE : loginUser.getRememberedUntil();
+        long remaining = expiry - loginUser.getLoginTime();
+        if (remaining <= 0) return;
+        loginUser.setExpireTime(expiry);
         // 根据uuid将loginUser缓存
         String userKey = getTokenKey(loginUser.getToken());
-        redisCache.setCacheObject(userKey, loginUser, expireTime, TimeUnit.MINUTES);
+        redisCache.setCacheObject(userKey, loginUser, (int)Math.min(Integer.MAX_VALUE, (remaining+999)/1000), TimeUnit.SECONDS);
     }
 
     /**

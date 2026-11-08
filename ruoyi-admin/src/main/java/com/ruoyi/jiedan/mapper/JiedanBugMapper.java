@@ -10,6 +10,10 @@ public interface JiedanBugMapper
 
     JiedanBug selectById(Long id);
 
+    List<JiedanBug> selectActionForReminder(@Param("orderId") Long orderId, @Param("bugId") Long bugId);
+
+    JiedanBug selectCustomerBugForUpdate(@Param("id") Long id, @Param("account") String account);
+
     int insert(JiedanBug bug);
 
     int updateStatus(@Param("id") Long id, @Param("status") String status);

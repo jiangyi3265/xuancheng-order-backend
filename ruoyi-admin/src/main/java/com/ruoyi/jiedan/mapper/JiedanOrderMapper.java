@@ -10,7 +10,18 @@ public interface JiedanOrderMapper
     List<JiedanOrder> selectAll();
 
     /** ownerId 不为空时只返回负责人是该账号的项目；为空返回全部（总管理员） */
-    List<Map<String, Object>> selectAdminSummaries(@Param("ownerId") Long ownerId);
+    List<Map<String, Object>> selectAdminSummaries(@Param("ownerId") Long ownerId, @Param("me") Long me);
+
+    int updateNextStep(@Param("id") Long id, @Param("nextStep") String nextStep, @Param("nextOwnerId") Long nextOwnerId,
+                       @Param("nextDue") String nextDue, @Param("updateTime") java.util.Date updateTime);
+
+    JiedanOrder selectScopedForUpdate(@Param("id") Long id, @Param("ownerScope") Long ownerScope);
+
+    int updateUrgentUntil(@Param("id") Long id, @Param("urgentUntil") String urgentUntil);
+
+    int updateHandling(@Param("id") Long id, @Param("handled") boolean handled, @Param("time") java.util.Date time);
+
+    int bumpVersion(@Param("id") Long id);
 
     List<JiedanOrder> selectByCustomerAccount(String customerAccount);
 

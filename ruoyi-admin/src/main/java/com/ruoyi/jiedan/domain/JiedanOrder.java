@@ -19,6 +19,9 @@ public class JiedanOrder
     private BigDecimal amount;
     private Long ownerId;
     private String status;
+    private Boolean handled;
+    private String handledTime;
+    private String urgentUntil;
     private String priority;
     private String deadline;
     private String requirement;
@@ -47,6 +50,12 @@ public class JiedanOrder
     private String deleteBy;
     /** 删除人账号 id，客户自己删除时为空 */
     private Long deleteById;
+    /** 下一步：做什么（内部字段，客户看不到） */
+    private String nextStep;
+    /** 下一步：谁来做 */
+    private Long nextOwnerId;
+    /** 下一步：截止日期 yyyy-MM-dd */
+    private String nextDue;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -68,6 +77,13 @@ public class JiedanOrder
     public void setOwnerId(Long ownerId) { this.ownerId = ownerId; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Boolean getHandled() { return handled; }
+    public void setHandled(Boolean handled) { this.handled = handled; }
+    public String getUrgentUntil() { return urgentUntil; }
+    public void setUrgentUntil(String urgentUntil) { this.urgentUntil = urgentUntil; }
+
+    public String getHandledTime() { return handledTime; }
+    public void setHandledTime(String handledTime) { this.handledTime = handledTime; }
     public String getPriority() { return priority; }
     public void setPriority(String priority) { this.priority = priority; }
     public String getDeadline() { return deadline; }
@@ -104,4 +120,10 @@ public class JiedanOrder
     public void setDeleteBy(String deleteBy) { this.deleteBy = deleteBy; }
     public Long getDeleteById() { return deleteById; }
     public void setDeleteById(Long deleteById) { this.deleteById = deleteById; }
+    public String getNextStep() { return nextStep; }
+    public void setNextStep(String nextStep) { this.nextStep = nextStep; }
+    public Long getNextOwnerId() { return nextOwnerId; }
+    public void setNextOwnerId(Long nextOwnerId) { this.nextOwnerId = nextOwnerId; }
+    public String getNextDue() { return nextDue; }
+    public void setNextDue(String nextDue) { this.nextDue = nextDue; }
 }
