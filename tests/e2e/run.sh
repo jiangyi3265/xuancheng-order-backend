@@ -131,6 +131,7 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     mysql_db "$DB" < "$ROOT/deploy/upgrade_collab_v1.sql" || die "upgrade_collab_v1.sql 第 $round 次执行失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_project_handling_v1.sql" || die "项目处理状态升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_project_urgency_v1.sql" || die "项目加急日期升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_pending_receipt_v1.sql" || die "待处理提醒回执升级失败"
   done
   echo "   四个升级脚本各执行两遍（含幂等性）：成功"
   AFTER="$(data_fingerprint)"

@@ -21,6 +21,16 @@ public interface JiedanOrderMapper
 
     int updateHandling(@Param("id") Long id, @Param("handled") boolean handled, @Param("time") java.util.Date time);
 
+    void beginReceipt(@Param("id") Long id, @Param("key") String key, @Param("recipient") Long recipient, @Param("entry") Long entry);
+
+    int confirmReceipt(@Param("id") Long id, @Param("key") String key, @Param("entry") Long entry);
+
+    String selectReceipts(@Param("id") Long id);
+
+    void clearReceipts(@Param("id") Long id, @Param("key") String key);
+
+    void clearReassignedReceipts(@Param("id") Long id);
+
     int bumpVersion(@Param("id") Long id);
 
     List<JiedanOrder> selectByCustomerAccount(String customerAccount);

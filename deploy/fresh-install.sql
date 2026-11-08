@@ -852,3 +852,13 @@ CREATE TABLE IF NOT EXISTS jiedan_quote_counter (
  last_number int unsigned NOT NULL,
  PRIMARY KEY(source_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS jiedan_pending_receipt (
+    order_id bigint NOT NULL,
+    task_key varchar(32) NOT NULL,
+    recipient_id bigint NOT NULL,
+    first_entry bigint NOT NULL,
+    sent_entry bigint DEFAULT NULL,
+    sent_at datetime DEFAULT NULL,
+    PRIMARY KEY (order_id, task_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

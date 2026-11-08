@@ -66,6 +66,42 @@
         select <include refid="cols"/> from jiedan_order where del_flag = 0 order by id desc
     </select>
 
+    <sql id="receiptJson">
+        select json_objectagg(r.task_key, json_object('by', t.user_name, 'at', date_format(r.sent_at, '%Y-%m-%d %H:%i:%s')))
+        from jiedan_pending_receipt r join jiedan_timeline t on t.id = r.sent_entry
+        where r.order_id = o.id and r.recipient_id = if(r.task_key = 'next', coalesce(o.next_owner_id,o.owner_id), o.owner_id)
+    </sql>
+
+    <select id="selectReceipts" resultType="String">
+        select (<include refid="receiptJson"/>) from jiedan_order o where o.id = #{id}
+    </select>
+
+    <insert id="beginReceipt">
+        insert into jiedan_pending_receipt (order_id, task_key, recipient_id, first_entry)
+        values (#{id}, #{key}, #{recipient}, #{entry})
+        on duplicate key update
+            sent_entry = if(recipient_id = #{recipient}, sent_entry, null),
+            sent_at = if(recipient_id = #{recipient}, sent_at, null),
+            first_entry = if(recipient_id = #{recipient}, first_entry, #{entry}),
+            recipient_id = #{recipient}
+    </insert>
+
+    <update id="confirmReceipt">
+        update jiedan_pending_receipt set sent_entry = #{entry}, sent_at = now()
+        where order_id = #{id} and task_key = #{key} and first_entry &lt;= #{entry}
+          and (sent_entry is null or sent_entry &lt; #{entry})
+    </update>
+
+    <delete id="clearReceipts">
+        delete from jiedan_pending_receipt where order_id = #{id}
+        <if test="key != null">and task_key = #{key}</if>
+    </delete>
+
+    <delete id="clearReassignedReceipts">
+        delete r from jiedan_pending_receipt r join jiedan_order o on o.id = r.order_id
+        where r.order_id = #{id} and not (r.recipient_id &lt;=> if(r.task_key = 'next', coalesce(o.next_owner_id,o.owner_id),o.owner_id))
+    </delete>
+
     <select id="selectAdminSummaries" resultType="java.util.LinkedHashMap">
         select
             o.id as id,
@@ -89,6 +125,7 @@
             o.paid as paid,
             o.received_amount as receivedAmount,
             o.assign_state as assignState,
+            (<include refid="receiptJson"/>) as reminderReceipts,
             o.next_step as nextStep,
             o.next_owner_id as nextOwnerId,
             o.next_due as nextDue,

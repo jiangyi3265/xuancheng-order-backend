@@ -68,6 +68,9 @@ public interface IJiedanOrderService
     Map<String, Object> customerMessage(Long orderId, String account, String customerName,
                                         String content, Object attachments);
 
+    /** 客户确认验收：只有「待验收」的项目可以确认，确认后变成「已完成」；不是自己的项目返回 null。 */
+    Map<String, Object> acceptForCustomer(Long orderId, String account, String customerName);
+
     /** 管理端建单：下属管理员只能建在自己名下，总管理员可指派负责人 */
     Map<String, Object> create(Map<String, Object> payload);
 
@@ -125,6 +128,8 @@ public interface IJiedanOrderService
 
     /** 催一下（推送对方 + 记时间线） */
     Map<String, Object> nudge(Map<String, Object> payload);
+
+    Map<String, Object> completePendingItem(Long id, Map<String, Object> payload);
 
     void remindPendingItem(Long id, Map<String, Object> payload);
 

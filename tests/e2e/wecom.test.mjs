@@ -7,6 +7,8 @@ import { ok, call, login, good, denied, sql, section, finish, BASE } from './lib
 const PORT = Number(process.env.E2E_WECOM_PORT || 18199)
 const sends = []
 let tokenCalls = 0
+let holdNextCard = false
+let finishHeldCard
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x')
   const json = (o) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(o)) }
@@ -24,6 +26,11 @@ const server = http.createServer((req, res) => {
       const msg = JSON.parse(body)
       sends.push({ token: url.searchParams.get('access_token'), msg })
       if (msg.touser === 'nobody') return json({ errcode: 0, errmsg: 'ok', invaliduser: 'nobody' })
+      if (holdNextCard && msg.news?.articles[0].title.startsWith('待处理提醒')) {
+        holdNextCard = false
+        finishHeldCard = () => json({ errcode: 0, errmsg: 'ok' })
+        return
+      }
       json({ errcode: 0, errmsg: 'ok' })
     })
     return
@@ -193,6 +200,8 @@ const pendingPath = '/jiedan/order/' + id
 const getVersion = async () => (await call(boss,'GET',pendingPath)).data.version
 const notify = async (who, kind, args = {}, version) => call(who,'POST',pendingPath+'/pending-reminder',
   {kind,version:version ?? await getVersion(),...args})
+const receipts = async () => (await call(boss,'GET',pendingPath)).data.reminderReceipts
+const listReceipts = async who => (await call(who,'GET','/jiedan/order/list')).data.find(row=>row.id===id).reminderReceipts
 const cards = () => sends.map(s=>s.msg).filter(msg=>msg.news?.articles[0]?.title === '待处理提醒 · 企微通知-'+tag)
 const checkCard = (recipient, path, detail) => {
   const msg = cards().at(-1)
@@ -206,6 +215,10 @@ const version = await getVersion()
 const duplicate = await Promise.all([notify(te,'next',{},version),notify(te,'next',{},version)])
 ok('两次同时点击只发一张下一步微信卡片',duplicate.filter(good).length===1 && duplicate.some(x=>x.code===409) && cards().length===1)
 ok('下一步只提醒单独指定的人并打开项目',checkCard('LaoBan',project,'确认设计稿') && checkCard('LaoBan',project,'2028-02-29'))
+const firstReceipt = (await receipts()).next
+ok('详情与另一账号的列表显示相同的发送人和服务端时间',firstReceipt?.by === '企微员工' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(firstReceipt.at) &&
+  JSON.stringify((await listReceipts(te)).next)===JSON.stringify(firstReceipt))
+ok('客户项目不包含内部提醒回执',(await call(customerToken,'GET','/jiedan/portal/orders/'+id)).data.reminderReceipts===undefined)
 await call(boss,'PUT',pendingPath+'/handling',{handled:false,version:await getVersion()})
 ok('手动未处理提醒打开项目处理状态',good(await notify(boss,'manual')) && checkCard('ZhangSan',project+'&followup=manual','未处理'))
 ok('提醒自己的加急也只发给自己且含截止时间',good(await notify(te,'urgent')) && checkCard('ZhangSan',project,deadline))
@@ -213,17 +226,36 @@ await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'action'})
 ok('问题提醒包含对应的说明、编号并直达该问题',good(await notify(boss,'bug',{bugId:bug})) &&
   checkCard('ZhangSan',issue,'卡片定位测试') && checkCard('ZhangSan',issue,'#'+bug))
 await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved'})
+const afterResolution = await receipts()
+ok('解决问题只清除本问题回执，已提醒的其他待办仍可见',!afterResolution['bug-'+bug] && afterResolution.manual && afterResolution.urgent && afterResolution.next)
+await call(customerToken,'PUT','/jiedan/portal/bug/'+bug+'/status',{status:'reopen'})
+ok('重新激活的问题从未提醒开始',!(await listReceipts(te))['bug-'+bug])
+await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved'})
 const beforeInvalid = cards().length
 ok('已解决的问题、无效类型、无效编号均不发送微信',denied(await notify(boss,'bug',{bugId:bug})) &&
   denied(await notify(boss,'x')) && denied(await notify(boss,'bug',{bugId:'invalid'})) && cards().length===beforeInvalid)
 await save(boss,{['push.wecom.user.'+emp.id]:''})
 ok('未绑定时明确报错且无微信请求',(await notify(boss,'manual')).msg.includes('绑定') && cards().length===beforeInvalid)
+const previousManual = (await receipts()).manual
 await save(boss,{['push.wecom.user.'+emp.id]:'nobody'})
 ok('企业微信拒收时不返回成功',(await notify(boss,'manual')).msg.includes('找不到账号'))
+ok('发送失败不会覆盖上一次成功回执',JSON.stringify((await receipts()).manual)===JSON.stringify(previousManual))
 await save(boss,{['push.wecom.user.'+emp.id]:'ZhangSan'})
 ok('绑定修正后可重发给原负责人',good(await notify(boss,'manual')) && checkCard('ZhangSan',project+'&followup=manual','未处理'))
 await call(boss,'PUT',pendingPath+'/next',{content:''})
 ok('已清除的下一步不再发送',denied(await notify(te,'next')))
+ok('清除下一步后列表立即移除旧回执',!(await listReceipts(te)).next)
+await call(boss,'PUT',pendingPath+'/next',{content:'新稿',ownerId:bossId})
+holdNextCard=true
+const late = notify(te,'next')
+try {
+  ok('模拟企业微信回执延迟',await waitFor(()=>!!finishHeldCard))
+  await call(boss,'PUT',pendingPath+'/next',{content:'新稿',ownerId:emp.id})
+  ok('改派后新的负责人可立即获得自己的回执',good(await notify(boss,'next')))
+} finally { if (finishHeldCard) finishHeldCard() }
+ok('晚到的旧回执不会覆盖改派后的提醒',good(await late) && (await receipts()).next.by !== firstReceipt.by)
+await call(boss,'PUT',pendingPath+'/urgency',{urgentUntil:'2028-03-01 17:00',previousUntil:deadline})
+ok('变更加急截止时间后该项重新待提醒，其他记录保留',!(await receipts()).urgent && !!(await receipts()).manual)
 ok('令牌被缓存（只取了一次）', tokenCalls === 1, 'tokenCalls=' + tokenCalls)
 
 // ---- 错误提示 ----

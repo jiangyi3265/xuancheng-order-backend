@@ -252,6 +252,39 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return getForCustomer(orderId, account);
     }
 
+    /**
+     * 客户确认验收：以前客户只能看到「验收中」，要员工在微信里问一句再手动改状态。
+     * 现在客户自己点「确认验收」，项目直接变成「已完成」，负责人和老板都会收到提醒（还有尾款没收的顺带写上）。
+     */
+    @Override
+    @Transactional
+    public Map<String, Object> acceptForCustomer(Long orderId, String account, String customerName)
+    {
+        JiedanOrder o = orderMapper.selectById(orderId);
+        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
+        // 连点两次 / 别的设备已经确认过：直接返回最新详情，不重复记录
+        if ("done".equals(o.getStatus())) return getForCustomer(orderId, account);
+        if (!"review".equals(o.getStatus())) throw new ServiceException("项目还没提交验收，暂时不能确认");
+        Date now = new Date();
+        String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
+
+        JiedanOrder upd = new JiedanOrder();
+        upd.setId(orderId);
+        upd.setStatus("done");
+        upd.setUnread(join(recipientIds(o.getOwnerId())));
+        upd.setUpdateTime(now);
+        orderMapper.update(upd);
+
+        addTimeline(orderId, name, "status", "确认验收，项目已完成", null, now);
+        audit.record("order.status", "order", orderId, o.getTitle(), "客户确认验收：待验收 → 已完成");
+        BigDecimal amount = o.getAmount() == null ? BigDecimal.ZERO : o.getAmount();
+        BigDecimal received = o.getReceivedAmount() == null ? BigDecimal.ZERO : o.getReceivedAmount();
+        BigDecimal owed = amount.subtract(received);
+        String tail = owed.signum() > 0 ? "，还有 ¥" + owed.stripTrailingZeros().toPlainString() + " 未收" : "";
+        pushRecipients(o, null, "✅ 客户已确认验收", o.getTitle() + "（" + name + "）" + tail);
+        return getForCustomer(orderId, account);
+    }
+
     // ---------- 新增（建单即派单 + 推送） ----------
     @Override
     @Transactional
@@ -525,6 +558,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long newOwner = null;
         if (o.getOwnerId() == null || !access.isAssignable(o.getOwnerId())) newOwner = access.currentUserId();
         orderMapper.restore(id, newOwner, new Date());
+        if (newOwner != null) orderMapper.clearReassignedReceipts(id);
         audit.record("order.restore", "order", id, o.getTitle(),
                 "从回收站恢复" + (newOwner == null ? "" : "；原负责人不可用，改由 " + access.currentName() + " 负责"));
     }
@@ -557,6 +591,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         paymentMapper.deleteByOrderId(id);
         bugUpdateMapper.deleteByOrderId(id);
         bugMapper.deleteByOrderId(id);
+        orderMapper.clearReceipts(id, null);
         timelineMapper.deleteByOrderId(id);
         mentionMapper.deleteByOrderId(id);
         orderMapper.deleteById(id);
@@ -588,6 +623,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         touchOrder(o.getId(), new Date());
+        clearBugReceipt(bug);
         audit.record("bug.delete", "bug", bugId, o.getTitle(), "删除问题：" + excerpt(bug.getContent()));
         return voOf(o.getId());
     }
@@ -627,6 +663,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         touchUnread(o, by, new Date());
+        if (!status.equals(bug.getStatus())) clearBugReceipt(bug);
         if (needsAction && o.getOwnerId() != null && !o.getOwnerId().equals(by))
             pushService.pushToTarget(o.getOwnerId(), "问题需处理", o.getTitle() + "：" + excerpt(bug.getContent()), NoticeTarget.bug(o.getId(), bugId));
         else if (!needsAction) pushRecipients(o, by, "问题状态更新", o.getTitle() + dash(byName) + dash(bugStatusLabel(status)), NoticeTarget.bug(o.getId(), bugId));
@@ -674,6 +711,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         markUnreadForCustomerAction(o, new Date());
+        clearBugReceipt(bug);
         audit.record("bug.delete", "bug", bugId, o.getTitle(), "客户删除问题：" + excerpt(bug.getContent()));
         return getForCustomer(o.getId(), account);
     }
@@ -723,6 +761,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
         markUnreadForCustomerAction(o, now);
+        clearBugReceipt(bug);
         String title = resolve ? "客户更新了问题状态" : "客户重新激活了问题";
         String detail = resolve ? bugStatusLabel(status) : excerpt(bug.getContent());
         pushRecipients(o, null, title, o.getTitle() + dash(name) + dash(detail), NoticeTarget.bug(o.getId(), bugId));
@@ -816,6 +855,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         {
             if (StringUtils.isEmpty(o.getNextStep())) return voOf(id);
             orderMapper.updateNextStep(id, null, null, null, now);
+            orderMapper.clearReceipts(id, "next");
             addTimeline(id, byName, "note", byName + " 清除了下一步：" + o.getNextStep(), null, now);
             touchUnread(o, by, now);
             audit.record("order.next", "order", id, o.getTitle(), "清除下一步：" + o.getNextStep());
@@ -842,6 +882,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (content.isEmpty())
         {
             orderMapper.updateNextStep(id, null, null, null, now);
+            orderMapper.clearReceipts(id, "next");
             touchUnread(o, by, now);
             pushRecipients(o, by, "✅ 下一步已完成", o.getTitle() + "：" + done + "（" + byName + "）");
             return voOf(id);
@@ -863,6 +904,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             catch (Exception e) { throw new ServiceException("截止日期格式不正确"); }
         }
         orderMapper.updateNextStep(o.getId(), content, nextOwner, due.isEmpty() ? null : due, now);
+        if (justDone != null || !Objects.equals(content, o.getNextStep()) || !Objects.equals(nextOwner, o.getNextOwnerId())
+                || !Objects.equals(due, Objects.toString(o.getNextDue(), "")))
+            orderMapper.clearReceipts(o.getId(), "next");
         String who = ownerName(nextOwner);
         String dueText = due.isEmpty() ? "" : " · " + due + " 前";
         addTimeline(o.getId(), byName, "note", byName + " 设置下一步：" + content + "（" + who + dueText + "）", null, now);
@@ -893,9 +937,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     private void retargetNextStep(JiedanOrder cur, Long newOwner)
     {
         Long nextOwner = cur.getNextOwnerId();
-        if (nextOwner == null || newOwner == null || StringUtils.isEmpty(cur.getNextStep())) return;
-        if (!nextOwner.equals(cur.getOwnerId()) || access.bossUserIds().contains(nextOwner)) return;
-        orderMapper.updateNextStep(cur.getId(), cur.getNextStep(), newOwner, cur.getNextDue(), new Date());
+        if (nextOwner != null && nextOwner.equals(cur.getOwnerId()) && newOwner != null
+                && !StringUtils.isEmpty(cur.getNextStep()) && !access.bossUserIds().contains(nextOwner))
+            orderMapper.updateNextStep(cur.getId(), cur.getNextStep(), newOwner, cur.getNextDue(), new Date());
+        orderMapper.clearReassignedReceipts(cur.getId());
     }
 
     // ---------- 改状态 ----------
@@ -940,6 +985,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (!Objects.equals(current.getVersion(), ((Number) expected).longValue()))
             throw new ServiceException("项目已更新，请刷新后重新标记", 409);
         orderMapper.updateHandling(id, (Boolean) mark, new Date());
+        orderMapper.clearReceipts(id, "manual");
+        if (current.getUrgentUntil() != null && !mark.equals(current.getHandled())) orderMapper.clearReceipts(id, "urgent");
         return voOf(id);
     }
 
@@ -968,6 +1015,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             throw new ServiceException("加急日期已被修改，请核对最新日期后重试", 409);
 
         orderMapper.updateUrgentUntil(id, date);
+        orderMapper.clearReceipts(id, "urgent");
         audit.record("order.update", "order", id, current.getTitle(), date == null ? "取消加急" : "加急至 " + date);
         return voOf(id);
     }
@@ -1059,9 +1107,15 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return voOf(o.getId());
     }
 
-    private void recordReminder(JiedanOrder o, Long target, String byName, String reminder, Date now)
+    private void clearBugReceipt(JiedanBug bug)
     {
-        addTimeline(o.getId(), byName, "note", reminder, null, now);
+        orderMapper.clearReceipts(bug.getOrderId(), "bug-" + bug.getId());
+        orderMapper.clearReceipts(bug.getOrderId(), "bugs");
+    }
+
+    private Long recordReminder(JiedanOrder o, Long target, String byName, String reminder, Date now)
+    {
+        Long entry = addTimeline(o.getId(), byName, "note", reminder, null, now);
         // 催办标记为目标未读
         if (target != null)
         {
@@ -1073,6 +1127,55 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             upd.setUpdateTime(now);
             orderMapper.update(upd);
         }
+        return entry;
+    }
+
+    private Long pendingRecipient(JiedanOrder order, String kind)
+    {
+        if ("next".equals(kind) && order.getNextOwnerId() != null) return order.getNextOwnerId();
+        return order.getOwnerId();
+    }
+
+    /** Complete the specific task displayed in the notification drawer, under the same lock as its version check. */
+    @Override
+    @Transactional
+    public Map<String, Object> completePendingItem(Long id, Map<String, Object> payload)
+    {
+        JiedanOrder order = orderMapper.selectScopedForUpdate(id, access.ownerScope());
+        if (order == null) throw new ServiceException(JiedanAccess.DENIED);
+        Object version = payload.get("version");
+        if (!(version instanceof Integer || version instanceof Long)
+                || !Objects.equals(order.getVersion(), ((Number) version).longValue()))
+            throw new ServiceException("项目已更新，请核对最新待处理事项后再标记", 409);
+        if ("done".equals(order.getStatus()) || "cancelled".equals(order.getStatus()))
+            throw new ServiceException("项目已结束，请刷新待处理清单", 409);
+        String kind = Objects.toString(payload.get("kind"), "");
+        Long recipient = pendingRecipient(order, kind);
+        if (recipient == null || !recipient.equals(access.currentUserId()))
+            throw new ServiceException("仅当前事项的负责人可以在通知里标记已处理", 403);
+        switch (kind) {
+            case "bug":
+                Object bugId = payload.get("bugId");
+                if (!(bugId instanceof Integer || bugId instanceof Long)) break;
+                Long target = ((Number) bugId).longValue();
+                if (bugMapper.selectActionForReminder(id, target).isEmpty()) break;
+                return changeBugStatus(target, Map.of("status", "resolved"));
+            case "next":
+                if (StringUtils.isEmpty(order.getNextStep())) break;
+                return completeNextStep(id, java.util.Collections.emptyMap());
+            case "urgent":
+                if (order.getUrgentUntil() == null || Boolean.TRUE.equals(order.getHandled())) break;
+                Map<String, Object> urgency = new LinkedHashMap<>();
+                urgency.put("previousUntil", order.getUrgentUntil());
+                urgency.put("urgentUntil", null);
+                return setUrgency(id, urgency);
+            case "manual":
+                if (order.getHandledTime() == null || Boolean.TRUE.equals(order.getHandled())) break;
+                return setHandling(id, Map.of("version", version, "handled", true));
+            default:
+                throw new ServiceException("请选择有效的待处理事项");
+        }
+        throw new ServiceException("这条事项已变更，请核对最新待处理清单", 409);
     }
 
     @Override
@@ -1093,10 +1196,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 || !Objects.equals(order.getVersion(), ((Number) version).longValue()))
             throw new ServiceException("项目已更新，请核对最新待处理事项后再提醒", 409);
 
-        Long recipient = order.getOwnerId();
+        String taskKey = Objects.toString(payload.get("kind"), "");
+        Long recipient = pendingRecipient(order, taskKey);
         NoticeTarget target = NoticeTarget.order(id);
         String detail;
-        switch (Objects.toString(payload.get("kind"), ""))
+        switch (taskKey)
         {
             case "urgent":
                 if (order.getUrgentUntil() == null || Boolean.TRUE.equals(order.getHandled()))
@@ -1112,7 +1216,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             case "next":
                 if (order.getNextStep() == null || order.getNextStep().trim().isEmpty())
                     throw new ServiceException("这条下一步已经移出待处理");
-                if (order.getNextOwnerId() != null) recipient = order.getNextOwnerId();
                 detail = "下一步：" + order.getNextStep()
                         + (order.getNextDue() == null ? "" : " · 截止 " + order.getNextDue());
                 break;
@@ -1126,9 +1229,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                     JiedanBug bug = bugs.get(0);
                     detail = "问题 #" + bug.getId() + "：" + excerpt(strOr(bug.getContent(), "请查看问题附件"));
                     target = NoticeTarget.bug(id, bug.getId());
+                    taskKey = "bug-" + bug.getId();
                 } else {
                     detail = "请跟进项目中标记为需处理的问题";
                     target = NoticeTarget.pendingBugs(id);
+                    taskKey = "bugs";
                 }
                 break;
             default:
@@ -1138,8 +1243,21 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             throw new ServiceException("请先为这条事项指定有效的负责人");
         String sender = access.currentName();
         Runnable deliver = pushService.prepareWecomReminder(recipient, "待处理提醒 · " + order.getTitle(), sender + " 提醒你：" + detail, target);
-        recordReminder(order, recipient, sender, "向" + ownerName(recipient) + "发起微信提醒：" + detail, new Date());
-        return deliver;
+        Long entry = recordReminder(order, recipient, sender, "向" + ownerName(recipient) + "发起微信提醒：" + detail, new Date());
+        String key = taskKey;
+        orderMapper.beginReceipt(id, key, recipient, entry);
+        return () -> {
+            deliver.run();
+            try {
+                transactions.executeWithoutResult(status -> {
+                    // Lock the project first, as when reserving the send. A changed task discards a late acknowledgement.
+                    orderMapper.bumpVersion(id);
+                    orderMapper.confirmReceipt(id, key, entry);
+                });
+            } catch (org.springframework.dao.DataAccessException | org.springframework.transaction.TransactionException e) {
+                throw new ServiceException("企业微信已接收，但提醒记录暂未保存，请勿重复发送");
+            }
+        };
     }
 
     // ---------- 推送设置 ----------
@@ -1757,6 +1875,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             vo.put("handled", Boolean.TRUE.equals(o.getHandled()));
             vo.put("handledTime", o.getHandledTime());
             vo.put("urgentUntil", o.getUrgentUntil());
+            vo.put("reminderReceipts", parseReceipts(orderMapper.selectReceipts(o.getId())));
             vo.put("payments", payments);
             vo.put("nextStep", o.getNextStep());
             vo.put("nextOwnerId", o.getNextOwnerId());
@@ -1861,6 +1980,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return vo;
     }
 
+    private Map<?, ?> parseReceipts(String json)
+    {
+        return json == null ? java.util.Collections.emptyMap() : JSON.parseObject(json);
+    }
+
     private Map<String, Object> toListSummaryVO(Map<String, Object> row)
     {
         Map<String, Object> vo = new LinkedHashMap<>();
@@ -1917,6 +2041,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("lastMessageId", row.get("lastMessageId"));
         if ("1".equals(String.valueOf(row.get("actionBugCount")))) vo.put("actionBugId", row.get("actionBugId"));
         vo.put("bugCount", row.get("bugCount") == null ? 0 : row.get("bugCount"));
+        vo.put("reminderReceipts", parseReceipts(asStr(row.get("reminderReceipts"))));
         vo.put("nextStep", row.get("nextStep"));
         vo.put("nextOwnerId", row.get("nextOwnerId"));
         vo.put("nextDue", row.get("nextDue"));

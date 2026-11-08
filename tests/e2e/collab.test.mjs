@@ -127,6 +127,34 @@ sql(`update jiedan_order set status='${projectStatus}' where id=${id}`)
     (await read()).urgentUntil == null && (await card()).urgentUntil == null)
 }
 
+// 铃铛基于当前项目和事项版本完成，避免其他人的旧页面误改刚替换的下一步。
+{
+  const path = '/jiedan/order/'+id
+  const close = (who,kind,version,bugId) => call(who,'POST',path+'/pending-completion',{kind,version,bugId})
+  const first = (await call(boss,'PUT',path+'/next',{content:'旧待办',ownerId:a.id})).data
+  const changed = (await call(boss,'PUT',path+'/next',{content:'新待办',ownerId:a.id})).data
+  ok('铃铛拒绝旧版本，不覆盖新待办',(await close(ta,'next',first.version)).code===409 &&
+    (await call(boss,'GET',path)).data.nextStep==='新待办')
+  ok('其他成员与客户不能通过铃铛标记',denied(await close(tb,'next',changed.version)) &&
+    denied(await close(client,'next',changed.version)))
+  ok('不能标记不存在的或已解决的问题',denied(await close(ta,'bug',changed.version,9999999)) &&
+    denied(await close(ta,'bug',changed.version,issueId)))
+  for (const kind of ['next','urgent','bug','manual']) {
+    ok('可见项目的其他人不能在铃铛代办 '+kind,
+      (await close(boss,kind,changed.version,issueId)).code===403)
+  }
+  const responses = await Promise.all([close(ta,'next',changed.version),close(ta,'next',changed.version)])
+  ok('两次同时标记只完成一次',responses.filter(good).length===1 && responses.some(x=>x.code===409) &&
+    !(await call(boss,'GET',path)).data.nextStep)
+  const delegated = (await call(boss,'PUT',path+'/next',{content:'确认交付范围',ownerId:bossId})).data
+  ok('下一步单独指派时仅这一步的负责人可完成',
+    (await close(ta,'next',delegated.version)).code===403 && good(await close(boss,'next',delegated.version)))
+  const legacy = (await call(boss,'PUT',path+'/next',{content:'旧项目下一步'})).data
+  sql(`update jiedan_order set next_owner_id=null where id=${id}`)
+  ok('旧下一步缺少指定人时由项目负责人办理',
+    (await close(boss,'next',legacy.version)).code===403 && good(await close(ta,'next',legacy.version)))
+}
+
 // ---- 下一步 ----
 ok('不能把下一步交给看不到项目的员工', denied(await call(boss, 'PUT', `/jiedan/order/${id}/next`, { content: '出首页设计', ownerId: b.id })))
 ok('截止日期格式不对被拒', denied(await call(boss, 'PUT', `/jiedan/order/${id}/next`, { content: '出首页设计', ownerId: a.id, due: '明天' })))

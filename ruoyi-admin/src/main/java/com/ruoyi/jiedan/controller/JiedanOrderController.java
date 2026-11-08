@@ -321,6 +321,13 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.addRevision(body));
     }
 
+    @PostMapping("/{id}/pending-completion")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult completePendingItem(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.completePendingItem(id, body));
+    }
+
     @PostMapping("/{id}/pending-reminder")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult remindPendingItem(@PathVariable Long id, @RequestBody Map<String, Object> body)

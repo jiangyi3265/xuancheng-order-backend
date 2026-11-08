@@ -54,6 +54,15 @@ public class JiedanPortalController extends BaseController
         return vo == null ? AjaxResult.error("项目不存在或无权查看") : AjaxResult.success(vo);
     }
 
+    /** 客户确认验收：「待验收」的项目由客户点确认后变成「已完成」 */
+    @PutMapping("/orders/{id}/accept")
+    public AjaxResult acceptDelivery(@PathVariable Long id)
+    {
+        Map<String, Object> vo = service.acceptForCustomer(id, SecurityUtils.getUsername(), nickName());
+        if (vo == null) return AjaxResult.error("项目不存在或无权操作");
+        return AjaxResult.success(vo);
+    }
+
     /** 客户删除自己提交的问题 */
     @DeleteMapping("/orders/{id}")
     public AjaxResult removeMyOrder(@PathVariable Long id)
