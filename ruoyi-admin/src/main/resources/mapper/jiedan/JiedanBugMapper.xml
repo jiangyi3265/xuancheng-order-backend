@@ -20,20 +20,41 @@
         select <include refid="cols"/> from jiedan_bug where order_id = #{orderId} order by id asc
     </select>
 
+    <select id="customerRequirements" resultType="java.util.LinkedHashMap">
+        select b.order_id as orderId, b.id, left(substring_index(b.content, char(10), 1), 160) as title,
+               b.status, date_format(b.create_time, '%Y-%m-%d %H:%i') as submittedAt, b.attachments as rawAttachments,
+               r.update_id as reviewId, date_format(invite.create_time, '%Y-%m-%d %H:%i') as reviewTime,
+               u.id as replyId, left(u.content, 180) as replyContent,
+               date_format(u.create_time, '%Y-%m-%d %H:%i') as replyTime,
+               case when u.attachments is null or trim(u.attachments) in ('', 'null', '[]') then 0 else 1 end as replyFiles,
+               coalesce(seen.update_id, 0) as seenId
+        from jiedan_order o join jiedan_bug b on b.order_id = o.id
+        left join jiedan_issue_review r on b.status = 'confirm' and r.bug_id = b.id
+                 and r.customer_id = #{customerId} and r.state = 'pending'
+        left join jiedan_bug_update invite on invite.id = r.update_id
+        left join jiedan_bug_update u on u.id = (
+            select max(m.update_id) from jiedan_bug_reply_meta m
+            left join jiedan_issue_review notice on notice.update_id = m.update_id
+            where m.bug_id = b.id and m.sender_kind = 'team'
+              and (notice.update_id is null or (notice.customer_id = #{customerId} and notice.state != 'cancelled'))
+        )
+        left join jiedan_customer_issue_seen seen on seen.bug_id = b.id and seen.customer_id = #{customerId}
+        where o.customer_account = #{account} and o.del_flag = 0
+        order by b.id desc
+    </select>
+
     <select id="selectById" parameterType="Long" resultMap="JiedanBugResult">
         select <include refid="cols"/> from jiedan_bug where id = #{id}
+    </select>
+
+    <select id="lockById" resultMap="JiedanBugResult">
+        select <include refid="cols"/> from jiedan_bug where id = #{id} for update
     </select>
 
     <select id="selectActionForReminder" resultMap="JiedanBugResult">
         select id, content from jiedan_bug where order_id = #{orderId} and status = 'action'
         <if test="bugId != null">and id = #{bugId}</if>
         order by id limit 2
-    </select>
-
-    <select id="selectCustomerBugForUpdate" resultMap="JiedanBugResult">
-        select b.* from jiedan_bug b join jiedan_order o on o.id = b.order_id
-        where b.id = #{id} and o.customer_account = #{account} and o.del_flag = 0
-        for update
     </select>
 
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBug" useGeneratedKeys="true" keyProperty="id">

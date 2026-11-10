@@ -220,6 +220,7 @@
             o.version as version,
             o.create_time as createTime,
             o.update_time as updateTime,
+            lt.id as lastMessageId,
             coalesce(mc.message_count, 0) as messageCount,
             lt.user_name as lastMessageUser,
             lt.type as lastMessageType,
@@ -396,4 +397,23 @@
         delete from jiedan_order where id = #{id}
     </delete>
 
+    <insert id="reserveIntake">
+        insert into jiedan_intake_receipt (customer_id, request_key, payload_hash)
+        values (#{customerId}, #{key}, #{hash})
+        on duplicate key update request_key = values(request_key)
+    </insert>
+    <select id="lockIntake" resultType="java.util.LinkedHashMap">
+        select r.order_id as orderId, r.bug_id as bugId, b.id as visibleBugId, r.payload_hash as payloadHash, o.id as visibleId,
+               o.order_no as orderNo, o.title, coalesce(b.create_time, o.create_time) as created
+        from jiedan_intake_receipt r
+        left join jiedan_order o on o.id = r.order_id and o.customer_account = #{account} and o.del_flag = 0
+        left join jiedan_bug b on b.id = r.bug_id and b.order_id = o.id
+        where r.customer_id = #{customerId} and r.request_key = #{key} for update
+    </select>
+    <select id="customerProjectIds" resultType="Long">
+        select id from jiedan_order where customer_account = #{account} and del_flag = 0 order by id limit 2
+    </select>
+    <update id="finishIntake">
+        update jiedan_intake_receipt set order_id = #{orderId}, bug_id = #{bugId} where customer_id = #{customerId} and request_key = #{key}
+    </update>
 </mapper>

@@ -95,6 +95,7 @@ r = await call(t1, 'POST', '/jiedan/customer', { userName: 'cust_s1', nickName: 
 ok('staff1 创建客户 cust_s1', good(r), JSON.stringify(r))
 r = await call(t1, 'POST', '/jiedan/order', { title: '绑自己的客户', customerAccount: 'cust_s1', customer: '一号客户' })
 ok('staff1 可绑定自己的客户', good(r), JSON.stringify(r))
+const projectS = r.data.id
 const cl1 = await call(t1, 'GET', '/jiedan/customer/list')
 ok('staff1 只看到自己的客户', good(cl1) && cl1.data.length === 1 && cl1.data[0].userName === 'cust_s1', JSON.stringify(cl1.data?.map(c => c.userName)))
 const custA = sql("select user_id from sys_user where user_name='cust_a'")
@@ -143,30 +144,36 @@ ok('boss 看到全部 3 个客户', cl1.data.length === 3, JSON.stringify(cl1.da
 ok('客户列表带归属管理员名', cl1.data.find(c => c.userName === 'cust_s1')?.ownerName === '费鹏飞' && cl1.data.find(c => c.userName === 'cust_a')?.ownerName === '尚琦凯', JSON.stringify(cl1.data.map(c => [c.userName, c.ownerName])))
 ok('boss 把 cust_b 转交 staff2', good(await call(boss, 'PUT', '/jiedan/customer/owner', { userId: Number(sql("select user_id from sys_user where user_name='cust_b'")), ownerId: s2 })))
 
-section('I 客户提交需求，自动落到归属管理员')
+section('I 客户逐条提交需求，仅归入自己的绑定项目')
 const cA = await login('cust_a', 'customer123')
 const cS1 = await login('cust_s1', 'cust123')
 const cB = await login('cust_b', 'customer123')
 ok('三个客户登录', !!cA && !!cS1 && !!cB)
-r = await call(cA, 'POST', '/jiedan/order/intake', { title: 'A的新需求', requirement: 'r', contact: 'c', ownerId: 2, byUserName: '甲客户' })
-ok('cust_a 提交 -> 负责人=总管理员(忽略前端 ownerId=2)', good(r) && r.data.ownerId === bossId, JSON.stringify(r.data?.ownerId))
-const idA = r.data?.id
-r = await call(cS1, 'POST', '/jiedan/order/intake', { title: 'S1客户的新需求', requirement: 'r', contact: 'c', ownerId: 2 })
-ok('cust_s1 提交 -> 负责人=staff1', good(r) && r.data.ownerId === s1, JSON.stringify(r.data?.ownerId))
-const idS = r.data?.id
-r = await call(cB, 'POST', '/jiedan/order/intake', { title: 'B的新需求', requirement: 'r', contact: 'c' })
-ok('cust_b(已转交) 提交 -> 负责人=staff2', good(r) && r.data.ownerId === s2, JSON.stringify(r.data?.ownerId))
-const idB = r.data?.id
-ok('未读只通知相关人: 订单 S 的 unread=[staff1,boss]', JSON.stringify(sql(`select unread from jiedan_order where id=${idS}`).split(',').map(Number).sort((a, b) => a - b)) === JSON.stringify([bossId, s1].sort((a, b) => a - b)), sql(`select unread from jiedan_order where id=${idS}`))
-ok('staff1 看得到 S 订单, staff2 看不到', good(await call(t1, 'GET', '/jiedan/order/' + idS)) && denied(await call(t2, 'GET', '/jiedan/order/' + idS)))
-ok('staff2 看不到 A 订单(总管理员的)', denied(await call(t2, 'GET', '/jiedan/order/' + idA)))
-ok('staff1 看不到 B 订单(staff2 的)', denied(await call(t1, 'GET', '/jiedan/order/' + idB)))
-r = await call(cS1, 'POST', '/jiedan/portal/message', { orderId: idS, content: '你好' })
+const preIntakeCount = sql('select count(*) from jiedan_order')
+const projectA = 3, projectB = 4 // seed.sql 中已绑定给 cust_a / cust_b
+async function addRequirement(token, title, expectedProject, expectedOwner, extra = {}) {
+  const response = await call(token, 'POST', '/jiedan/order/intake', { title, requirement: 'r', ...extra })
+  const receipt = response.data
+  ok(title + '有独立需求编号且属于原项目', good(response) && receipt?.id === expectedProject && receipt.bugId > 0, JSON.stringify(response))
+  ok(title + '保留项目原负责人', sql(`select owner_id from jiedan_order where id=${expectedProject}`) === String(expectedOwner))
+  return receipt
+}
+const aReceipt = await addRequirement(cA, 'A的新需求', projectA, s1, { ownerId: bossId, byUserName: '假提交人' })
+ok('提交人取自登录账号', aReceipt?.bugId > 0 && sql(`select created_by from jiedan_bug where id=${aReceipt.bugId} and order_id=${projectA}`) === '甲客户')
+await addRequirement(cS1, 'S1客户的新需求', projectS, s1, { ownerId: s2 })
+await addRequirement(cB, 'B的新需求', projectB, bossId)
+ok('客户归属转交及提交需求不新建或转派项目', sql('select count(*) from jiedan_order') === preIntakeCount)
+ok('客户不能把需求提交到其他客户的项目', denied(await call(cA, 'POST', '/jiedan/order/intake', { orderId: projectS, title: '越权提交' })))
+ok('未读只通知相关人: 订单 S 的 unread=[staff1,boss]', JSON.stringify(sql(`select unread from jiedan_order where id=${projectS}`).split(',').map(Number).sort((a, b) => a - b)) === JSON.stringify([bossId, s1].sort((a, b) => a - b)), sql(`select unread from jiedan_order where id=${projectS}`))
+ok('staff1 看得到 S 订单, staff2 看不到', good(await call(t1, 'GET', '/jiedan/order/' + projectS)) && denied(await call(t2, 'GET', '/jiedan/order/' + projectS)))
+ok('staff2 看不到 A 项目(staff1 的)', denied(await call(t2, 'GET', '/jiedan/order/' + projectA)))
+ok('staff1 看不到 B 项目(总管理员的)', denied(await call(t1, 'GET', '/jiedan/order/' + projectB)))
+r = await call(cS1, 'POST', '/jiedan/portal/message', { orderId: projectS, content: '你好' })
 ok('客户留言成功', good(r), JSON.stringify(r))
-ok('留言后未读=[staff1,boss] 不含 staff2', !sql(`select unread from jiedan_order where id=${idS}`).split(',').includes(String(s2)))
+ok('留言后未读=[staff1,boss] 不含 staff2', !sql(`select unread from jiedan_order where id=${projectS}`).split(',').includes(String(s2)))
 ok('客户不能访问管理接口 list', denied(await call(cS1, 'GET', '/jiedan/order/list')))
 ok('客户不能访问成员接口', denied(await call(cS1, 'GET', '/jiedan/staff/list')))
-ok('客户看不到别人的项目(portal)', denied(await call(cS1, 'GET', '/jiedan/portal/orders/' + idA)))
+ok('客户看不到别人的项目(portal)', denied(await call(cS1, 'GET', '/jiedan/portal/orders/' + projectA)))
 const mine = await call(cS1, 'GET', '/jiedan/portal/orders')
 ok('客户只看到自己的项目', good(mine) && mine.data.every(o => o.customerAccount === 'cust_s1') && mine.data.length >= 1)
 ok('staff1 不能走客户 intake 接口', denied(await call(t1, 'POST', '/jiedan/order/intake', { title: 'x' })))

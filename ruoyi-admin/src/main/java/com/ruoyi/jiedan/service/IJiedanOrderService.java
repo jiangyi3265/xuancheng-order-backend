@@ -93,9 +93,15 @@ public interface IJiedanOrderService
 
     Map<String, Object> changeBugStatus(Long bugId, Map<String, Object> payload);
 
+    Map<String, Object> requestIssueReview(Long bugId, Map<String, Object> payload);
+
+    Map<String, Object> decideIssueReview(Long bugId, Long reviewId, Map<String, Object> payload, String account);
+
     Map<String, Object> createBugForCustomer(Map<String, Object> payload, String account, String customerName);
 
     Map<String, Object> deleteBugForCustomer(Long bugId, String account);
+
+    boolean markCustomerReplySeen(Long orderId, Long bugId, Long updateId, String account);
 
     Map<String, Object> addBugUpdateForCustomer(Long bugId, Map<String, Object> payload, String account, String customerName);
 

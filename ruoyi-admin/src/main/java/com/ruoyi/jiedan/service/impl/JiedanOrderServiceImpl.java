@@ -18,9 +18,12 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONWriter;
+import org.apache.commons.codec.digest.DigestUtils;
 import com.alibaba.fastjson2.JSONArray;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.SecurityUtils;
@@ -35,6 +38,7 @@ import com.ruoyi.jiedan.domain.JiedanTimeline;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanApprovalMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugMapper;
+import com.ruoyi.jiedan.mapper.JiedanIssueReviewMapper;
 import com.ruoyi.jiedan.mapper.JiedanBugUpdateMapper;
 import com.ruoyi.jiedan.mapper.JiedanMentionMapper;
 import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
@@ -70,6 +74,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     @Autowired
     private JiedanBugMapper bugMapper;
+
+    @Autowired
+    private JiedanIssueReviewMapper issueReviews;
 
     @Autowired
     private JiedanBugUpdateMapper bugUpdateMapper;
@@ -215,11 +222,65 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         List<Map<String, Object>> list = new ArrayList<>();
         if (account == null || account.trim().isEmpty()) return list;
+        Map<Long, List<Map<String, Object>>> byProject = new LinkedHashMap<>();
+        for (Map<String, Object> item : bugMapper.customerRequirements(account, SecurityUtils.getUserId()))
+        {
+            customerIssuePreview(item);
+            byProject.computeIfAbsent(asLong(item.get("orderId")), id -> new ArrayList<>()).add(item);
+        }
         for (Map<String, Object> row : orderMapper.selectCustomerSummaries(account))
         {
-            list.add(toListSummaryVO(row));
+            Map<String, Object> summary = toListSummaryVO(row);
+            List<Map<String, Object>> requirements = byProject.getOrDefault(asLong(row.get("id")), java.util.Collections.emptyList());
+            summary.put("requirements", requirements);
+            summary.put("pendingReviewCount", requirements.stream().filter(item -> item.get("reviewId") != null).count());
+            list.add(summary);
         }
         return list;
+    }
+
+    private void customerIssuePreview(Map<String, Object> item)
+    {
+        String raw = asStr(item.remove("rawAttachments"));
+        JSONArray files = normalizedAttachments(raw, "bug", asLong(item.get("id")));
+        Object first = null;
+        int count = 0;
+        for (Object value : files)
+        {
+            if (!(value instanceof Map)) continue;
+            Map<?, ?> file = (Map<?, ?>) value;
+            if (!"image".equals(file.get("type")) || Objects.toString(file.get("url"), "").isEmpty()) continue;
+            count++;
+            if (first == null)
+            {
+                Map<String, Object> preview = new LinkedHashMap<>();
+                for (String field : Arrays.asList("url", "name", "size", "type", "ext"))
+                    if (file.get(field) != null) preview.put(field, file.get(field));
+                first = preview;
+            }
+        }
+        item.put("firstImage", first);
+        item.put("imageCount", count);
+        Long replyId = asLong(item.remove("replyId"));
+        Map<String, Object> reply = new LinkedHashMap<>();
+        reply.put("id", replyId);
+        reply.put("content", Objects.toString(item.remove("replyContent"), ""));
+        reply.put("time", item.remove("replyTime"));
+        reply.put("hasAttachments", asLong(item.remove("replyFiles")) != 0L);
+        long seenId = asLong(item.remove("seenId"));
+        reply.put("unread", replyId != null && replyId > seenId);
+        item.put("latestTeamReply", replyId == null ? null : reply);
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public boolean markCustomerReplySeen(Long orderId, Long bugId, Long updateId, String account)
+    {
+        if (StringUtils.isEmpty(account)) return false;
+        JiedanOrder order = issueReviews.lockProject(bugId, null, account);
+        if (order == null || !orderId.equals(order.getId()) || !bugUpdateMapper.isTeamReply(bugId, updateId)) return false;
+        bugUpdateMapper.markSeen(SecurityUtils.getUserId(), bugId, updateId);
+        return true;
     }
 
     @Override
@@ -275,6 +336,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUpdateTime(now);
         orderMapper.update(upd);
 
+        issueReviews.cancelForProject(orderId);
         addTimeline(orderId, name, "status", "确认验收，项目已完成", null, now);
         audit.record("order.status", "order", orderId, o.getTitle(), "客户确认验收：待验收 → 已完成");
         BigDecimal amount = o.getAmount() == null ? BigDecimal.ZERO : o.getAmount();
@@ -314,13 +376,87 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public Map<String, Object> createFromCustomer(Map<String, Object> p, String account)
     {
-        Long owner = access.ownerOfAccount(SecurityUtils.getUserId());
-        Map<String, Object> q = new LinkedHashMap<>(p);
-        q.put("channel", "form");
-        q.put("status", "pending");
-        if (strOr(asStr(q.get("customer")), null) == null) q.put("customer", account);
-        String byName = strOr(asStr(q.get("byUserName")), "客户：" + account);
-        return insertOrder(q, owner, account, null, byName, false);
+        Long customerId = SecurityUtils.getUserId();
+        Object keyValue = p.get("submissionKey");
+        if (keyValue != null && (!(keyValue instanceof String) || !((String) keyValue).matches("[A-Za-z0-9_-]{16,64}")))
+            throw new ServiceException("提交凭据无效，请重新打开需求表单");
+        String key = (String) keyValue;
+        if (key == null) return addCustomerRequirement(p, account);
+
+        Map<String, Object> fields = new LinkedHashMap<>();
+        for (String field : Arrays.asList("title", "customer", "contact", "requirement", "attachments", "priority", "deadline"))
+            fields.put(field, p.get(field));
+        if (p.get("orderId") != null) fields.put("orderId", asLong(p.get("orderId")));
+        fields.put("amount", asDecimal(p.get("amount")).stripTrailingZeros().toPlainString());
+        String hash = DigestUtils.sha256Hex(JSON.toJSONString(fields, JSONWriter.Feature.SortMapEntriesByKeys));
+
+        // The unique reservation and the order commit together. A concurrent retry waits for the first transaction.
+        orderMapper.reserveIntake(customerId, key, hash);
+        Map<String, Object> receipt = orderMapper.lockIntake(customerId, key, account);
+        if (receipt.get("orderId") != null)
+        {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("replayed", true);
+            result.put("changed", !hash.equals(receipt.get("payloadHash")));
+            if (receipt.get("visibleId") != null && (receipt.get("bugId") == null || receipt.get("visibleBugId") != null))
+            {
+                result.put("id", receipt.get("visibleId"));
+                result.put("bugId", receipt.get("visibleBugId"));
+                result.put("orderNo", receipt.get("orderNo"));
+                result.put("title", receipt.get("title"));
+                result.put("createTime", fmtIfDate(receipt.get("created")));
+            }
+            return result;
+        }
+
+        Map<String, Object> result = addCustomerRequirement(p, account);
+        orderMapper.finishIntake(customerId, key, asLong(result.get("id")), asLong(result.get("bugId")));
+        return result;
+    }
+
+    private Map<String, Object> addCustomerRequirement(Map<String, Object> p, String account)
+    {
+        Long projectId = asLong(p.get("orderId"));
+        if (p.get("orderId") == null)
+        {
+            List<Long> ids = orderMapper.customerProjectIds(account);
+            if (ids.isEmpty()) throw new ServiceException("请先联系团队绑定项目");
+            if (ids.size() != 1) throw new ServiceException("请选择这条需求所属的项目");
+            projectId = ids.get(0);
+        }
+        JiedanOrder project = orderMapper.selectScopedForUpdate(projectId, null);
+        if (project == null || !account.equals(project.getCustomerAccount()))
+            throw new ServiceException("项目不存在或已解除绑定，请重新选择项目");
+
+        String title = java.util.Objects.toString(p.get("title"), "").trim();
+        String description = java.util.Objects.toString(p.get("requirement"), "").trim();
+        String contact = java.util.Objects.toString(p.get("contact"), "").trim();
+        if (title.codePointCount(0, title.length()) > 255 || contact.codePointCount(0, contact.length()) > 100)
+            throw new ServiceException("请缩短需求标题或联系方式");
+        if (title.isEmpty() && isBlankBug(description, p.get("attachments")))
+            throw new ServiceException("请填写需求或添加附件");
+        List<String> lines = new ArrayList<>();
+        if (!title.isEmpty()) lines.add(title);
+        if (!description.isEmpty() && !description.equals(title)) lines.add(description);
+        if (lines.isEmpty()) lines.add("附件需求");
+        if (!contact.isEmpty()) lines.add("联系方式：" + contact);
+        if (asDecimal(p.get("amount")).signum() > 0) lines.add("参考预算：¥" + money(asDecimal(p.get("amount"))));
+        String content = String.join("\n", lines);
+        if (content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 65535)
+            throw new ServiceException("需求说明太长，请将详细内容放在附件里");
+
+        Date now = new Date();
+        String author = strOr(SecurityUtils.getLoginUser().getUser().getNickName(), account);
+        JiedanBug bug = insertBug(projectId, author, content, p.get("attachments"), now);
+        markUnreadForCustomerAction(project, now);
+        notifyNewBug(project, bug, null);
+        Map<String, Object> receipt = new LinkedHashMap<>();
+        receipt.put("id", projectId);
+        receipt.put("orderNo", project.getOrderNo());
+        receipt.put("title", project.getTitle());
+        receipt.put("bugId", bug.getId());
+        receipt.put("createTime", fmt(now));
+        return receipt;
     }
 
     private Map<String, Object> insertOrder(Map<String, Object> p, Long ownerId, String customerAccount,
@@ -366,10 +502,12 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     // ---------- 修改 ----------
     @Override
+    @Transactional
     public Map<String, Object> update(Map<String, Object> p)
     {
         Long id = asLong(p.get("id"));
-        JiedanOrder cur = guard(id);
+        JiedanOrder cur = orderMapper.selectScopedForUpdate(id, access.ownerScope());
+        if (cur == null) throw new ServiceException(JiedanAccess.DENIED);
         Long by = access.currentUserId();
         boolean boss = access.isBoss();
 
@@ -433,6 +571,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         o.setUpdateTime(new Date());
         List<String> changes = describeChanges(cur, o);
         orderMapper.update(o);
+        if ((o.getCustomerAccount() != null && !Objects.equals(o.getCustomerAccount(), cur.getCustomerAccount()))
+                || closedStatus(o.getStatus())) issueReviews.cancelForProject(id);
 
         if (newOwner != null && !newOwner.equals(cur.getOwnerId()))
         {
@@ -522,12 +662,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     @Transactional
     public boolean deleteForCustomer(Long id, String account)
     {
-        JiedanOrder o = orderMapper.selectById(id);
+        JiedanOrder o = orderMapper.selectScopedForUpdate(id, null);
         if (o == null || account == null || !account.equals(o.getCustomerAccount())) return false;
         if (!"pending".equals(o.getStatus()))
         {
             throw new ServiceException("该项目已在处理中，不能自行删除，如需撤销请在项目里留言联系我们");
         }
+        if (!"form".equals(o.getChannel()) || !bugMapper.selectByOrderId(id).isEmpty())
+            throw new ServiceException("请在修改需求中选择要撤回的那一条");
         String byName = "客户：" + access.currentName();
         orderMapper.softDelete(id, byName, null, new Date());
         audit.record("order.delete", "order", id, o.getTitle(), "客户撤回（移入回收站）");
@@ -614,12 +756,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> deleteBug(Long bugId)
     {
-        JiedanBug bug = bugMapper.selectById(bugId);
+        JiedanOrder o = issueReviews.lockProject(bugId, access.ownerScope(), null);
+        if (o == null) throw new ServiceException(JiedanAccess.DENIED);
+        JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = guard(bug.getOrderId());
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         touchOrder(o.getId(), new Date());
@@ -629,30 +772,34 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> addBugUpdate(Long bugId, Map<String, Object> p)
     {
-        JiedanBug bug = bugMapper.selectById(bugId);
+        JiedanOrder o = issueReviews.lockProject(bugId, access.ownerScope(), null);
+        if (o == null) throw new ServiceException(JiedanAccess.DENIED);
+        JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = guard(bug.getOrderId());
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
         Long by = access.currentUserId();
         String byName = access.currentName();
         Date now = new Date();
-        insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBugUpdate reply = insertBugUpdate(bugId, byName, asStr(p.get("content")), p.get("attachments"), now);
+        bugUpdateMapper.insertMeta(reply.getId(), bugId, "team", by, null, null);
         touchUnread(o, by, now);
         pushRecipients(o, by, "问题有补充说明", o.getTitle() + dash(byName), NoticeTarget.bug(o.getId(), bugId));
         return voOf(o.getId());
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> changeBugStatus(Long bugId, Map<String, Object> p)
     {
-        JiedanBug bug = bugMapper.selectById(bugId);
+        JiedanOrder o = issueReviews.lockProject(bugId, access.ownerScope(), null);
+        if (o == null) throw new ServiceException(JiedanAccess.DENIED);
+        JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = guard(bug.getOrderId());
+        requireNoPendingReview(bug);
 
         boolean needsAction = p != null && "action".equals(p.get("status"));
         if (needsAction && ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus())))
@@ -701,13 +848,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> deleteBugForCustomer(Long bugId, String account)
     {
-        JiedanBug bug = bugMapper.selectById(bugId);
+        if (StringUtils.isEmpty(account)) return null;
+        JiedanOrder o = issueReviews.lockProject(bugId, null, account);
+        if (o == null) return null;
+        JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
-        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
         bugUpdateMapper.deleteByBugId(bugId);
         bugMapper.deleteById(bugId);
         markUnreadForCustomerAction(o, new Date());
@@ -717,33 +865,64 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> addBugUpdateForCustomer(Long bugId, Map<String, Object> p, String account, String customerName)
     {
-        JiedanBug bug = bugMapper.selectById(bugId);
+        if (StringUtils.isEmpty(account)) return null;
+        JiedanOrder o = issueReviews.lockProject(bugId, null, account);
+        if (o == null) return null;
+        JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
-        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
+        boolean reopen = Boolean.TRUE.equals(p.get("reopen"));
+        Long customerId = SecurityUtils.getUserId();
+        String key = Objects.toString(p.get("requestKey"), "");
+        String hash = null;
+        if (!key.isEmpty())
+        {
+            if (!key.matches("[A-Za-z0-9_-]{16,64}")) throw new ServiceException("补充凭据无效，请重新打开需求");
+            Map<String, Object> fields = new LinkedHashMap<>();
+            fields.put("content", asStr(p.get("content")));
+            fields.put("attachments", p.get("attachments"));
+            fields.put("reopen", reopen);
+            hash = DigestUtils.sha256Hex(JSON.toJSONString(fields, JSONWriter.Feature.SortMapEntriesByKeys));
+            String previous = bugUpdateMapper.customerReplyHash(bugId, customerId, key);
+            if (previous != null)
+            {
+                if (!previous.equals(hash)) throw new ServiceException("该次补充已保存，请使用新草稿追加其他内容");
+                return getForCustomer(o.getId(), account);
+            }
+        }
+        if (reopen)
+        {
+            requireNoPendingReview(bug);
+            if ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus()))
+                throw new ServiceException("请先重新开启项目，再重新激活问题");
+            if (!"action".equals(bug.getStatus())) bugMapper.updateStatus(bugId, "action");
+            clearBugReceipt(bug);
+        }
         Date now = new Date();
         String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
+        JiedanBugUpdate reply = insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
+        bugUpdateMapper.insertMeta(reply.getId(), bugId, "customer", customerId, key.isEmpty() ? null : key, hash);
 
         markUnreadForCustomerAction(o, now);
-        pushRecipients(o, null, "客户补充了问题说明", o.getTitle() + dash(name), NoticeTarget.bug(o.getId(), bugId));
+        pushRecipients(o, null, reopen ? "客户反馈仍需调整" : "客户补充了问题说明", o.getTitle() + dash(name), NoticeTarget.bug(o.getId(), bugId));
         return getForCustomer(o.getId(), account);
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> changeBugStatusForCustomer(Long bugId, Map<String, Object> p, String account, String customerName)
     {
-        JiedanBug bug = bugMapper.selectCustomerBugForUpdate(bugId, account);
+        if (StringUtils.isEmpty(account)) return null;
+        JiedanOrder o = issueReviews.lockProject(bugId, null, account);
+        if (o == null) return null;
+        JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
-        JiedanOrder o = orderMapper.selectById(bug.getOrderId());
-        if (o == null || account == null || !account.equals(o.getCustomerAccount())) return null;
 
+        requireNoPendingReview(bug);
         String requested = asStr(p == null ? null : p.get("status"));
         boolean resolve = "resolved".equals(requested);
         if (!resolve && !"open".equals(requested) && !"reopen".equals(requested))
@@ -766,6 +945,168 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         String detail = resolve ? bugStatusLabel(status) : excerpt(bug.getContent());
         pushRecipients(o, null, title, o.getTitle() + dash(name) + dash(detail), NoticeTarget.bug(o.getId(), bugId));
         return getForCustomer(o.getId(), account);
+    }
+
+    private boolean closedStatus(String status)
+    {
+        return "done".equals(status) || "cancelled".equals(status);
+    }
+
+    private void requireNoPendingReview(JiedanBug bug)
+    {
+        if ("confirm".equals(bug.getStatus()))
+            throw new ServiceException("这条需求正在等待客户确认，请刷新查看", 409);
+    }
+
+    private String reviewHash(Object payload)
+    {
+        return DigestUtils.sha256Hex(JSON.toJSONString(payload, JSONWriter.Feature.SortMapEntriesByKeys));
+    }
+
+    private Object matchingImage(JSONArray files, String url)
+    {
+        for (Object entry : files)
+        {
+            if (!(entry instanceof Map)) continue;
+            Map<?, ?> file = (Map<?, ?>) entry;
+            if ("image".equals(file.get("type")) && file.get("url") != null && (url.isEmpty() || url.equals(file.get("url"))))
+                return file;
+        }
+        return null;
+    }
+
+    private Object beforeImage(JiedanBug bug, String url)
+    {
+        Object image = matchingImage(normalizedAttachments(bug.getAttachments(), "bug", bug.getId()), url);
+        if (image != null) return image;
+        for (JiedanBugUpdate reply : bugUpdateMapper.selectByBugId(bug.getId()))
+        {
+            if (url.isEmpty() && !"customer".equals(reply.getSenderKind())) continue;
+            image = matchingImage(normalizedAttachments(reply.getAttachments(), "bugUpdate", reply.getId()), url);
+            if (image != null) return image;
+        }
+        if (url.isEmpty()) return null;
+        throw new ServiceException("请选择这条需求中的修改前截图");
+    }
+
+    private Map<String, Object> afterImage(Object entry)
+    {
+        if (entry == null) return null;
+        if (!(entry instanceof Map)) throw new ServiceException("修改后图片无效");
+        Map<?, ?> file = (Map<?, ?>) entry;
+        String url = Objects.toString(file.get("url"), "");
+        if (!url.matches("/jiedan/media/[a-f0-9]{32}\\.(png|jpe?g|webp|gif|bmp|avif|svg)"))
+            throw new ServiceException("请上传修改后截图");
+        String name = url.substring(url.lastIndexOf('/') + 1);
+        Map<String, Object> image = new LinkedHashMap<>();
+        image.put("type", "image");
+        image.put("url", url);
+        image.put("ext", name.substring(name.lastIndexOf('.') + 1));
+        image.put("name", Objects.toString(file.get("name"), "修改后截图"));
+        if (Boolean.TRUE.equals(file.get("annotated"))) image.put("annotated", true);
+        try
+        {
+            java.nio.file.Path path = attachmentStorage.resolve(name);
+            if (path == null) throw new ServiceException("修改后图片不存在，请重新上传");
+            image.put("size", java.nio.file.Files.size(path));
+        }
+        catch (java.io.IOException e) { throw new ServiceException("暂时无法读取修改后图片，请重试"); }
+        return image;
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> requestIssueReview(Long bugId, Map<String, Object> p)
+    {
+        JiedanOrder order = issueReviews.lockProject(bugId, access.ownerScope(), null);
+        if (order == null) throw new ServiceException(JiedanAccess.DENIED);
+        JiedanBug bug = bugMapper.lockById(bugId);
+        if (bug == null) throw new ServiceException("需求已删除", 409);
+        String key = Objects.toString(p.get("requestKey"), "");
+        if (!key.matches("[A-Za-z0-9_-]{16,64}")) throw new ServiceException("请重新打开确认邀请");
+        String note = Objects.toString(p.get("content"), "").trim();
+        String url = Objects.toString(p.get("beforeUrl"), "").trim();
+        Map<String, Object> after = afterImage(p.get("afterImage"));
+        if (note.isEmpty() && after == null) throw new ServiceException("请填写修改说明或上传修改后截图");
+        if (note.length() > 12000) throw new ServiceException("修改说明过长，请分段说明");
+        Long previousId = asLong(p.get("previousReviewId"));
+        Long me = access.currentUserId();
+        String hash = reviewHash(Arrays.asList(previousId, url, after, note));
+        String priorHash = issueReviews.requestHash(bugId, me, key);
+        if (priorHash != null)
+        {
+            if (!priorHash.equals(hash)) throw new ServiceException("此次邀请已发出，请刷新后操作", 409);
+            return voOf(order.getId());
+        }
+        if (closedStatus(order.getStatus())) throw new ServiceException("请先重新开启项目");
+        if (!access.isBoss() && "pending".equals(order.getAssignState())) throw new ServiceException("请先接收项目，再请客户确认");
+        if (StringUtils.isEmpty(order.getCustomerAccount())) throw new ServiceException("请先绑定客户账号");
+        Long customerId = accountMapper.selectUserIdByName(order.getCustomerAccount());
+        if (customerId == null) throw new ServiceException("请先绑定有效的客户账号");
+        Map<String, Object> latest = issueReviews.latest(bugId);
+        if (!Objects.equals(previousId, latest == null ? null : asLong(latest.get("id"))))
+            throw new ServiceException("这条需求已有新的确认记录，请刷新后操作", 409);
+        requireNoPendingReview(bug);
+        Object before = beforeImage(bug, url);
+        Date now = new Date();
+        JiedanBugUpdate invitation = insertBugUpdate(bugId, access.currentName(), note.isEmpty() ? "请确认这次修改" : "请确认修改：" + note,
+                after == null ? java.util.Collections.emptyList() : java.util.Collections.singletonList(after), now);
+        bugUpdateMapper.insertMeta(invitation.getId(), bugId, "team", me, null, null);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", invitation.getId());
+        row.put("bugId", bugId);
+        row.put("customerId", customerId);
+        row.put("senderId", me);
+        row.put("key", key);
+        row.put("hash", hash);
+        row.put("priorStatus", strOr(bug.getStatus(), "open"));
+        row.put("beforeImage", jsonStr(before));
+        row.put("afterImage", jsonStr(after));
+        row.put("content", note);
+        issueReviews.insert(row);
+        bugMapper.updateStatus(bugId, "confirm");
+        clearBugReceipt(bug);
+        touchOrder(order.getId(), now);
+        return voOf(order.getId());
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> decideIssueReview(Long bugId, Long reviewId, Map<String, Object> p, String account)
+    {
+        if (StringUtils.isEmpty(account)) throw new ServiceException(JiedanAccess.DENIED);
+        JiedanOrder order = issueReviews.lockProject(bugId, null, account);
+        if (order == null) throw new ServiceException(JiedanAccess.DENIED);
+        JiedanBug bug = bugMapper.lockById(bugId);
+        Long me = SecurityUtils.getUserId();
+        Map<String, Object> review = issueReviews.latest(bugId);
+        if (bug == null || review == null || !reviewId.equals(asLong(review.get("id"))) || !me.equals(asLong(review.get("customerId"))))
+            throw new ServiceException("此确认邀请已失效，请刷新查看", 409);
+        String decision = Objects.toString(p.get("decision"), "");
+        boolean accept = "accept".equals(decision);
+        if (!accept && !"adjust".equals(decision)) throw new ServiceException("请选择确认结果");
+        String note = Objects.toString(p.get("content"), "").trim();
+        Object files = p.getOrDefault("attachments", java.util.Collections.emptyList());
+        if (!(files instanceof List) || (!accept && isBlankBug(note, files)))
+            throw new ServiceException("请说明还要调整的地方，或添加附件");
+        String state = accept ? "accepted" : "adjustment";
+        String hash = reviewHash(Arrays.asList(state, note, files));
+        if (state.equals(review.get("state")) && hash.equals(review.get("decisionHash")))
+            return getForCustomer(order.getId(), account);
+        if (!"pending".equals(review.get("state")) || !"confirm".equals(bug.getStatus()) || closedStatus(order.getStatus()))
+            throw new ServiceException("确认状态已更新，请刷新查看", 409);
+        if (issueReviews.decide(reviewId, state, hash) != 1) throw new ServiceException("确认状态已更新", 409);
+        Date now = new Date();
+        String message = accept ? "已确认这条需求" : "还要调整：" + strOr(note, "请看附件");
+        JiedanBugUpdate response = insertBugUpdate(bugId, access.currentName(), message, files, now);
+        bugUpdateMapper.insertMeta(response.getId(), bugId, "customer", me, null, null);
+        bugUpdateMapper.markSeen(me, bugId, reviewId);
+        bugMapper.updateStatus(bugId, accept ? "resolved" : "action");
+        clearBugReceipt(bug);
+        markUnreadForCustomerAction(order, now);
+        pushRecipients(order, null, accept ? "客户已确认需求" : "客户反馈仍需调整",
+                order.getTitle() + "：" + excerpt(accept ? bug.getContent() : strOr(note, bug.getContent())), NoticeTarget.bug(order.getId(), bugId));
+        return getForCustomer(order.getId(), account);
     }
 
     // ---------- 项目记事本（内部台账） ----------
@@ -945,9 +1286,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     // ---------- 改状态 ----------
     @Override
+    @Transactional
     public Map<String, Object> changeStatus(Map<String, Object> p)
     {
-        JiedanOrder o = guard(asLong(p.get("id")));
+        JiedanOrder o = orderMapper.selectScopedForUpdate(asLong(p.get("id")), access.ownerScope());
+        if (o == null) throw new ServiceException(JiedanAccess.DENIED);
         Long by = access.currentUserId();
         String byName = access.currentName();
         String status = checkStatus(asStr(p.get("status")));
@@ -959,6 +1302,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setStatus(status);
         upd.setUpdateTime(now);
         orderMapper.update(upd);
+        if (closedStatus(status)) issueReviews.cancelForProject(o.getId());
 
         String label = STATUS_LABELS.getOrDefault(status, status);
         addTimeline(o.getId(), byName, "status", "状态更新为「" + label + "」", null, now);
@@ -1010,11 +1354,30 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             catch (java.time.format.DateTimeParseException e) { throw new ServiceException("请选择有效的加急截止时间"); }
         }
         String date = (String) value;
-        if (Objects.equals(date, current.getUrgentUntil())) return toVO(current, true);
+        boolean reopen = payload.containsKey("reopenVersion");
+        boolean sameDate = Objects.equals(date, current.getUrgentUntil());
+        if (reopen)
+        {
+            Object version = payload.get("reopenVersion");
+            if (!(version instanceof Integer || version instanceof Long) || date == null
+                    || "done".equals(current.getStatus()) || "cancelled".equals(current.getStatus()))
+                throw new ServiceException("当前项目不能重新加入待办");
+            if (sameDate && !Boolean.TRUE.equals(current.getHandled())) return toVO(current, true);
+            if (!Objects.equals(current.getVersion(), ((Number) version).longValue()) || !Boolean.TRUE.equals(current.getHandled()))
+                throw new ServiceException("项目处理状态已更新，请核对后重试", 409);
+        }
+        else if (sameDate) return toVO(current, true);
         if (!Objects.equals(payload.get("previousUntil"), current.getUrgentUntil()))
             throw new ServiceException("加急日期已被修改，请核对最新日期后重试", 409);
 
-        orderMapper.updateUrgentUntil(id, date);
+        if (reopen)
+        {
+            Date now = new Date();
+            orderMapper.updateHandling(id, false, now);
+            orderMapper.clearReceipts(id, "manual");
+            addTimeline(id, access.currentName(), "note", "重新加急，已将项目标为未处理。上次标为已处理：" + strOr(current.getHandledTime(), "未记录"), null, now);
+        }
+        if (!sameDate) orderMapper.updateUrgentUntil(id, date);
         orderMapper.clearReceipts(id, "urgent");
         audit.record("order.update", "order", id, current.getTitle(), date == null ? "取消加急" : "加急至 " + date);
         return voOf(id);
@@ -1902,6 +2265,17 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             updatesByBug.computeIfAbsent(update.getBugId(), k -> new ArrayList<>()).add(update);
         }
 
+        Map<Long, Map<String, Object>> reviewsByBug = new LinkedHashMap<>();
+        for (Map<String, Object> review : issueReviews.latestByProject(o.getId()))
+        {
+            Long bugId = asLong(review.remove("bugId"));
+            review.remove("decisionHash");
+            Long customerId = asLong(review.remove("customerId"));
+            if (!includeInternal && !Objects.equals(customerId, SecurityUtils.getUserId())) continue;
+            for (String field : Arrays.asList("beforeImage", "afterImage"))
+                review.put(field, JSON.parseObject(asStr(review.get(field))));
+            reviewsByBug.put(bugId, review);
+        }
         List<Map<String, Object>> bugs = new ArrayList<>();
         for (JiedanBug b : bugMapper.selectByOrderId(o.getId()))
         {
@@ -1910,7 +2284,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("orderId", b.getOrderId());
             bm.put("content", b.getContent());
             bm.put("attachments", normalizedAttachments(b.getAttachments(), "bug", b.getId()));
-            bm.put("status", includeInternal && "action".equals(b.getStatus()) ? "action" : normalizeBugStatus(b.getStatus()));
+            bm.put("review", reviewsByBug.get(b.getId()));
+            bm.put("status", "confirm".equals(b.getStatus()) || (includeInternal && "action".equals(b.getStatus()))
+                    ? b.getStatus() : normalizeBugStatus(b.getStatus()));
+            bm.put("progressStatus", b.getStatus());
             bm.put("createdBy", displayMemberName(b.getCreatedBy()));
             bm.put("time", fmt(b.getCreateTime()));
 
@@ -1922,6 +2299,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 um.put("bugId", u.getBugId());
                 um.put("content", u.getContent());
                 um.put("attachments", normalizedAttachments(u.getAttachments(), "bugUpdate", u.getId()));
+                um.put("senderKind", u.getSenderKind());
                 um.put("createdBy", displayMemberName(u.getCreatedBy()));
                 um.put("time", fmt(u.getCreateTime()));
                 updates.add(um);
@@ -2012,6 +2390,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (lastType != null && !lastType.trim().isEmpty())
         {
             Map<String, Object> last = new LinkedHashMap<>();
+            last.put("id", row.get("lastMessageId"));
             last.put("type", lastType);
             last.put("user", displayMemberName(asStr(row.get("lastMessageUser"))));
             last.put("content", row.get("lastMessageContent"));

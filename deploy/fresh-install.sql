@@ -862,3 +862,54 @@ CREATE TABLE IF NOT EXISTS jiedan_pending_receipt (
     sent_at datetime DEFAULT NULL,
     PRIMARY KEY (order_id, task_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS jiedan_intake_receipt (
+    customer_id bigint NOT NULL,
+    request_key varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    payload_hash char(64) CHARACTER SET ascii NOT NULL,
+    order_id bigint DEFAULT NULL,
+    bug_id bigint DEFAULT NULL,
+    PRIMARY KEY (customer_id, request_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户需求提交回执';
+
+CREATE TABLE IF NOT EXISTS jiedan_bug_reply_meta (
+    update_id bigint NOT NULL,
+    bug_id bigint NOT NULL,
+    sender_kind varchar(12) CHARACTER SET ascii NOT NULL,
+    sender_id bigint NOT NULL,
+    request_key varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    payload_hash char(64) CHARACTER SET ascii DEFAULT NULL,
+    PRIMARY KEY (update_id),
+    UNIQUE KEY uq_bug_reply_request (bug_id, sender_id, request_key),
+    KEY idx_bug_reply_team (bug_id, sender_kind, update_id),
+    CONSTRAINT fk_bug_reply_meta_update FOREIGN KEY (update_id) REFERENCES jiedan_bug_update(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS jiedan_customer_issue_seen (
+    customer_id bigint NOT NULL,
+    bug_id bigint NOT NULL,
+    update_id bigint NOT NULL,
+    PRIMARY KEY (customer_id, bug_id),
+    KEY idx_issue_seen_bug (bug_id),
+    CONSTRAINT fk_issue_seen_bug FOREIGN KEY (bug_id) REFERENCES jiedan_bug(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS jiedan_issue_review (
+    update_id bigint NOT NULL,
+    bug_id bigint NOT NULL,
+    customer_id bigint NOT NULL,
+    sender_id bigint NOT NULL,
+    request_key varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    request_hash char(64) CHARACTER SET ascii NOT NULL,
+    prior_status varchar(20) NOT NULL,
+    state varchar(12) CHARACTER SET ascii NOT NULL DEFAULT 'pending',
+    before_image text,
+    after_image text,
+    note text,
+    decision_hash char(64) CHARACTER SET ascii,
+    PRIMARY KEY (update_id),
+    UNIQUE KEY uq_issue_review_request (bug_id, sender_id, request_key),
+    KEY idx_issue_review_latest (bug_id, update_id),
+    CONSTRAINT fk_issue_review_update FOREIGN KEY (update_id) REFERENCES jiedan_bug_update(id) ON DELETE CASCADE,
+    CONSTRAINT fk_issue_review_bug FOREIGN KEY (bug_id) REFERENCES jiedan_bug(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

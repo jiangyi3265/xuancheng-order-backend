@@ -7,6 +7,7 @@
         <result property="bugId"       column="bug_id"      />
         <result property="content"     column="content"     />
         <result property="attachments" column="attachments" />
+        <result property="senderKind" column="sender_kind" />
         <result property="createdBy"   column="created_by"  />
         <result property="createTime"  column="create_time" />
     </resultMap>
@@ -16,12 +17,15 @@
     </sql>
 
     <select id="selectByBugId" parameterType="Long" resultMap="JiedanBugUpdateResult">
-        select <include refid="cols"/> from jiedan_bug_update where bug_id = #{bugId} order by id asc
+        select u.id, u.bug_id, u.content, u.attachments, u.created_by, u.create_time, m.sender_kind
+        from jiedan_bug_update u left join jiedan_bug_reply_meta m on m.update_id = u.id
+        where u.bug_id = #{bugId} order by u.id asc
     </select>
 
     <select id="selectByOrderId" parameterType="Long" resultMap="JiedanBugUpdateResult">
-        select u.id, u.bug_id, u.content, u.attachments, u.created_by, u.create_time
+        select u.id, u.bug_id, u.content, u.attachments, u.created_by, u.create_time, m.sender_kind
         from jiedan_bug_update u
+        left join jiedan_bug_reply_meta m on m.update_id = u.id
         join jiedan_bug b on b.id = u.bug_id
         where b.order_id = #{orderId}
         order by u.id asc
@@ -30,6 +34,24 @@
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBugUpdate" useGeneratedKeys="true" keyProperty="id">
         insert into jiedan_bug_update (bug_id, content, attachments, created_by, create_time)
         values (#{bugId}, #{content}, #{attachments}, #{createdBy}, #{createTime})
+    </insert>
+
+    <insert id="insertMeta">
+        insert into jiedan_bug_reply_meta (update_id, bug_id, sender_kind, sender_id, request_key, payload_hash)
+        values (#{updateId}, #{bugId}, #{senderKind}, #{senderId}, #{key}, #{hash})
+    </insert>
+    <select id="customerReplyHash" resultType="string">
+        select payload_hash from jiedan_bug_reply_meta
+        where bug_id = #{bugId} and sender_id = #{customerId} and request_key = #{key} and sender_kind = 'customer'
+        for update
+    </select>
+    <select id="isTeamReply" resultType="boolean">
+        select exists(select 1 from jiedan_bug_reply_meta
+                      where update_id = #{updateId} and bug_id = #{bugId} and sender_kind = 'team')
+    </select>
+    <insert id="markSeen">
+        insert into jiedan_customer_issue_seen (customer_id, bug_id, update_id) values (#{customerId}, #{bugId}, #{updateId})
+        on duplicate key update update_id = greatest(update_id, #{updateId})
     </insert>
 
     <update id="updateAttachments">

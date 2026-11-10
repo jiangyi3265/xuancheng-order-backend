@@ -8,11 +8,13 @@ public interface JiedanBugMapper
 {
     List<JiedanBug> selectByOrderId(Long orderId);
 
+    List<java.util.Map<String, Object>> customerRequirements(@Param("account") String account, @Param("customerId") Long customerId);
+
     JiedanBug selectById(Long id);
 
-    List<JiedanBug> selectActionForReminder(@Param("orderId") Long orderId, @Param("bugId") Long bugId);
+    JiedanBug lockById(Long id);
 
-    JiedanBug selectCustomerBugForUpdate(@Param("id") Long id, @Param("account") String account);
+    List<JiedanBug> selectActionForReminder(@Param("orderId") Long orderId, @Param("bugId") Long bugId);
 
     int insert(JiedanBug bug);
 

@@ -132,6 +132,10 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     mysql_db "$DB" < "$ROOT/deploy/upgrade_project_handling_v1.sql" || die "项目处理状态升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_project_urgency_v1.sql" || die "项目加急日期升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_pending_receipt_v1.sql" || die "待处理提醒回执升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_intake_receipt_v1.sql" || die "客户需求回执升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_project_requirements_v1.sql" || die "项目需求回执升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_customer_issue_replies_v1.sql" || die "客户回复已读升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_customer_issue_confirm_v1.sql" || die "客户需求确认升级失败"
   done
   echo "   四个升级脚本各执行两遍（含幂等性）：成功"
   AFTER="$(data_fingerprint)"
@@ -197,7 +201,7 @@ fi
 
 export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER" E2E_WECOM_PORT="${E2E_WECOM_PORT:-18199}"
 RC=0
-for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session; do
+for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session customer-issue-replies customer-issue-confirm; do
   echo
   echo "################ $t.test.mjs ################"
   node "$HERE/$t.test.mjs" || RC=1

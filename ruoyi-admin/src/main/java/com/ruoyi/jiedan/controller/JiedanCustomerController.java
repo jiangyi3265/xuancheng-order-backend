@@ -26,6 +26,8 @@ import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanCustomerMapper;
+import com.ruoyi.jiedan.mapper.JiedanIssueReviewMapper;
+import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.jiedan.service.JiedanAccess;
 import com.ruoyi.jiedan.service.JiedanAuditService;
 import com.ruoyi.system.service.ISysRoleService;
@@ -48,6 +50,9 @@ public class JiedanCustomerController extends BaseController
 
     @Autowired
     private JiedanCustomerMapper customerMapper;
+
+    @Autowired
+    private JiedanIssueReviewMapper issueReviews;
 
     @Autowired
     private JiedanAccountMapper accountMapper;
@@ -148,6 +153,7 @@ public class JiedanCustomerController extends BaseController
     /** 删除客户账号（同时解绑其名下项目） */
     @DeleteMapping("/{userId}")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    @Transactional
     public AjaxResult remove(@PathVariable Long userId)
     {
         SysUser user = userService.selectUserById(userId);
@@ -155,6 +161,7 @@ public class JiedanCustomerController extends BaseController
         if (!isCustomer(userId)) return AjaxResult.error("非客户账号，禁止删除");
         if (!access.canManageCustomer(userId)) return AjaxResult.error("无权操作该客户账号");
         customerMapper.clearBinding(user.getUserName());
+        issueReviews.cancelForCustomer(userId);
         accountMapper.deleteOwner(userId);
         userService.deleteUserById(userId);
         kick(user.getUserName());

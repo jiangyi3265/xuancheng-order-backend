@@ -14,6 +14,10 @@ public class JiedanBugUpdate
     private String attachments;
     private String createdBy;
     private Date createTime;
+    private String senderKind;
+
+    public String getSenderKind() { return senderKind; }
+    public void setSenderKind(String senderKind) { this.senderKind = senderKind; }
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }

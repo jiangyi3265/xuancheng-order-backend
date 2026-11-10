@@ -130,13 +130,25 @@ ok('重新启用 hs1', good(await call(boss, 'PUT', '/jiedan/staff/status', { us
 const t1b = await login('hs1', 'hs1pass')
 ok('hs1 重新登录', !!t1b)
 
-section('D 客户删除限制')
-r = await call(c1, 'POST', '/jiedan/order/intake', { title: 'H-客户可撤回', requirement: 'r', contact: 'c' })
-const k1 = r.data.id
-r = await call(c1, 'POST', '/jiedan/order/intake', { title: 'H-已处理的', requirement: 'r', contact: 'c' })
+section('D 客户逐条撤回需求与项目删除限制')
+r = await call(c1, 'POST', '/jiedan/order/intake', { title: '尚未绑定' })
+ok('未绑定项目的客户不能提交需求', denied(r) && /绑定项目/.test(r.msg || ''))
+r = await call(t1b, 'POST', '/jiedan/order', { title: 'H-已处理的', customerAccount: 'hc1' })
 const k2 = r.data.id
-ok('客户提交两个需求，负责人是 hs1', good(r) && r.data.ownerId === hs1)
-ok('客户可以撤回待确认的需求', good(await call(c1, 'DELETE', '/jiedan/portal/orders/' + k1)))
+const first = await call(c1, 'POST', '/jiedan/order/intake', { title: 'H-需求一' })
+const second = await call(c1, 'POST', '/jiedan/order/intake', { title: 'H-需求二', orderId: k2 })
+const issue1 = first.data?.bugId, issue2 = second.data?.bugId
+ok('两个需求各有编号、同属绑定项目', good(first) && good(second) && first.data.id === k2 && second.data.id === k2 && issue1 > 0 && issue2 > 0 && issue1 !== issue2)
+ok('提交需求后项目仍归 hs1', sql(`select owner_id from jiedan_order where id=${k2}`) === String(hs1))
+ok('客户不能撤回其他项目的需求', denied(await call(c2, 'DELETE', '/jiedan/portal/bug/' + issue1)))
+ok('存在需求的绑定项目不能整单撤回', denied(await call(c1, 'DELETE', '/jiedan/portal/orders/' + k2)))
+r = await call(c1, 'DELETE', '/jiedan/portal/bug/' + issue1)
+ok('撤回第一条需求后，项目和第二条仍在', good(r) && r.data.id === k2 && !has(r.data.bugs, b => b.id === issue1) && has(r.data.bugs, b => b.id === issue2))
+
+// 旧版客户端曾把一次提交存为独立的待确认 form 项目，无需求子记录，仍应支持整单撤回和恢复。
+r = await call(t1b, 'POST', '/jiedan/order', { title: 'H-客户可撤回', channel: 'form', customerAccount: 'hc1' })
+const k1 = r.data.id
+ok('客户可以撤回旧版待确认 form 项目', good(await call(c1, 'DELETE', '/jiedan/portal/orders/' + k1)))
 ok('撤回后客户列表里没有', !has((await call(c1, 'GET', '/jiedan/portal/orders')).data, (o) => o.id === k1))
 ok('撤回的项目进了 hs1 的回收站，标明是客户删的', has((await call(t1b, 'GET', '/jiedan/order/trash')).data, (x) => x.id === k1 && /客户/.test(x.deleteBy)))
 ok('数据库里仍是软删除', sql(`select del_flag from jiedan_order where id=${k1}`) === '1')

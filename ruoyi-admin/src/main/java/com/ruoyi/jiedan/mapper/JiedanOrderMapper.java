@@ -25,6 +25,15 @@ public interface JiedanOrderMapper
 
     int confirmReceipt(@Param("id") Long id, @Param("key") String key, @Param("entry") Long entry);
 
+    void reserveIntake(@Param("customerId") Long customerId, @Param("key") String key, @Param("hash") String hash);
+
+    Map<String, Object> lockIntake(@Param("customerId") Long customerId, @Param("key") String key, @Param("account") String account);
+
+    void finishIntake(@Param("customerId") Long customerId, @Param("key") String key,
+                     @Param("orderId") Long orderId, @Param("bugId") Long bugId);
+
+    List<Long> customerProjectIds(@Param("account") String account);
+
     String selectReceipts(@Param("id") Long id);
 
     void clearReceipts(@Param("id") Long id, @Param("key") String key);

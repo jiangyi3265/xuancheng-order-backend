@@ -92,6 +92,13 @@ public class JiedanPortalController extends BaseController
         return AjaxResult.success(vo);
     }
 
+    @PostMapping("/orders/{orderId}/issues/{bugId}/replies/{updateId}/read")
+    public AjaxResult readIssueReply(@PathVariable Long orderId, @PathVariable Long bugId, @PathVariable Long updateId)
+    {
+        return service.markCustomerReplySeen(orderId, bugId, updateId, SecurityUtils.getUsername())
+            ? AjaxResult.success() : AjaxResult.error("回复不存在或无权查看");
+    }
+
     /** 客户在同一条 Bug 下追加 QA / 变更。 */
     @PostMapping("/bug/{id}/update")
     public AjaxResult bugUpdate(@PathVariable Long id, @RequestBody Map<String, Object> body)
@@ -99,6 +106,12 @@ public class JiedanPortalController extends BaseController
         Map<String, Object> vo = service.addBugUpdateForCustomer(id, body, SecurityUtils.getUsername(), nickName());
         if (vo == null) return AjaxResult.error("补充内容不能为空或问题不存在");
         return AjaxResult.success(vo);
+    }
+
+    @PostMapping("/bug/{id}/review/{reviewId}")
+    public AjaxResult decideIssueReview(@PathVariable Long id, @PathVariable Long reviewId, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.decideIssueReview(id, reviewId, body, SecurityUtils.getUsername()));
     }
 
     /** 客户更新 Bug 解决状态。 */

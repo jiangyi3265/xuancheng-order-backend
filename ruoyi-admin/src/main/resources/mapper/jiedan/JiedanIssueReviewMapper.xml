@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanIssueReviewMapper">
+
+    <!-- Lock the project before the issue, so reassignment and closing a project
+         cannot interleave with authorization, invitation creation or a decision. -->
+    <select id="lockProject" resultMap="com.ruoyi.jiedan.mapper.JiedanOrderMapper.JiedanOrderResult">
+        select o.* from jiedan_order o
+        where o.id = (select b.order_id from jiedan_bug b where b.id = #{bugId})
+          and o.del_flag = 0
+        <if test="ownerId != null">and o.owner_id = #{ownerId}</if>
+        <if test="account != null">and o.customer_account = #{account}</if>
+        for update
+    </select>
+    <sql id="fields">
+        r.update_id as id, r.bug_id as bugId, r.state, r.note as content,
+        r.customer_id as customerId, r.decision_hash as decisionHash,
+        r.before_image as beforeImage, r.after_image as afterImage,
+        date_format(u.create_time, '%Y-%m-%d %H:%i') as time
+    </sql>
+    <select id="latest" resultType="java.util.LinkedHashMap">
+        select <include refid="fields"/> from jiedan_issue_review r join jiedan_bug_update u on u.id = r.update_id
+        where r.bug_id = #{bugId} order by r.update_id desc limit 1 for update
+    </select>
+    <select id="latestByProject" resultType="java.util.LinkedHashMap">
+        select <include refid="fields"/> from jiedan_bug b
+        join jiedan_issue_review r on r.update_id = (select max(rr.update_id) from jiedan_issue_review rr where rr.bug_id = b.id)
+        join jiedan_bug_update u on u.id = r.update_id
+        where b.order_id = #{orderId}
+    </select>
+    <select id="requestHash" resultType="string">
+        select request_hash from jiedan_issue_review where bug_id = #{bugId} and sender_id = #{senderId} and request_key = #{key} for update
+    </select>
+    <insert id="insert">
+        insert into jiedan_issue_review
+          (update_id,bug_id,customer_id,sender_id,request_key,request_hash,prior_status,before_image,after_image,note)
+        values (#{id},#{bugId},#{customerId},#{senderId},#{key},#{hash},#{priorStatus},
+                #{beforeImage,jdbcType=LONGVARCHAR},#{afterImage,jdbcType=LONGVARCHAR},#{content})
+    </insert>
+    <update id="decide">
+        update jiedan_issue_review set state = #{state}, decision_hash = #{hash} where update_id = #{id} and state = 'pending'
+    </update>
+    <update id="cancelForProject">
+        update jiedan_bug b join jiedan_issue_review r on r.bug_id = b.id
+        set b.status = r.prior_status, r.state = 'cancelled'
+        where b.order_id = #{orderId} and b.status = 'confirm' and r.state = 'pending'
+    </update>
+    <update id="cancelForCustomer">
+        update jiedan_bug b join jiedan_issue_review r on r.bug_id = b.id
+        set b.status = r.prior_status, r.state = 'cancelled'
+        where r.customer_id = #{customerId} and b.status = 'confirm' and r.state = 'pending'
+    </update>
+</mapper>

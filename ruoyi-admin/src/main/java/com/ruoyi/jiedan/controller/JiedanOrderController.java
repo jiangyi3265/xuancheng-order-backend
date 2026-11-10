@@ -254,6 +254,13 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(vo);
     }
 
+    @PostMapping("/bug/{id}/review")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult requestIssueReview(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.requestIssueReview(id, body));
+    }
+
     @PutMapping("/bug/{id}/status")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult bugStatus(@PathVariable Long id, @RequestBody Map<String, Object> body)
