@@ -142,6 +142,12 @@
                 else json_length(o.attachments)
             end as attachmentCount,
             coalesce(bc.bug_count, 0) as bugCount,
+            if(o.status in ('done','cancelled'),0,coalesce(bc.new_count,0)) as newBugCount,
+            if(o.status in ('done','cancelled'),0,coalesce(bc.open_count,0)) as openBugCount,
+            case when nb.id is not null and o.status not in ('done','cancelled') then
+              json_object('id',nb.id,'content',case when nb.sheet_chars=0 or nb.content='附件需求' then ''
+              else left(substring_index(substring_index(coalesce(nb.content,''),concat(char(10),'联系方式：'),1),concat(char(10),'参考预算：'),1),40) end)
+            end as newBugPreview,
             bc.last_bug_id as lastBugId,
             bc.action_bug_id as actionBugId,
             lt.id as lastMessageId,
@@ -162,11 +168,17 @@
         from jiedan_order o
         left join (
             select order_id, count(*) as bug_count, max(id) as last_bug_id,
+                   sum(is_new) as new_count, max(if(is_new,id,null)) as latest_new,
+                   sum(ifnull(status,'open') in ('open','action')) as open_count,
                    max(case when status = 'action' then id end) as action_bug_id,
                    sum(case when status = 'action' then 1 else 0 end) as action_count
-            from jiedan_bug
+            from (select b.*, ifnull(b.status,'open')='open' and
+                  (b.sender_kind in ('customer','old_intake','old_account') or
+                  ((b.sender_kind is null or b.sender_kind='') and binary b.created_by in (binary p.customer,binary p.customer_account))) as is_new
+                  from jiedan_bug b join jiedan_order p on p.id=b.order_id) issues
             group by order_id
         ) bc on bc.order_id = o.id
+        left join jiedan_bug nb on nb.id=bc.latest_new
         left join (
             select order_id, count(*) as message_count, max(id) as last_id
             from jiedan_timeline

@@ -2338,6 +2338,23 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 int length = Math.min(120, text.codePointCount(0, text.length()));
                 previews.add(Map.of("id", bug.get("id"), "content", text.substring(0, text.offsetByCodePoints(0, length))));
             }
+            int newCount = 0;
+            int openCount = 0;
+            Map<String,Object> latest = null;
+            if (!"done".equals(o.getStatus()) && !"cancelled".equals(o.getStatus())) {
+                for (Map<String,Object> issue : bugs) {
+                    if (!List.of("open","action").contains(issue.get("status"))) continue;
+                    openCount++;
+                    if ("open".equals(issue.get("status")) && "customer".equals(issue.get("senderKind"))) {
+                        newCount++;
+                        String body = Objects.toString(issue.get("sheetContent"), "");
+                        latest = Map.of("id", issue.get("id"), "content", body.substring(0,body.offsetByCodePoints(0,Math.min(40,body.codePointCount(0,body.length())))));
+                    }
+                }
+            }
+            vo.put("newBugCount", newCount);
+            vo.put("openBugCount", openCount);
+            vo.put("newBugPreview", latest);
             vo.put("actionBugCount", previews.size());
             vo.put("actionBugPreviews", previews);
         }
@@ -2433,6 +2450,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         vo.put("pendingApprovals", row.get("pendingApprovals") == null ? 0 : row.get("pendingApprovals"));
         vo.put("unread", parseUnread(asStr(row.get("unread"))));
         vo.put("attachmentCount", row.get("attachmentCount") == null ? 0 : row.get("attachmentCount"));
+        vo.put("newBugCount", row.get("newBugCount"));
+        vo.put("openBugCount", row.get("openBugCount"));
+        String preview = asStr(row.get("newBugPreview"));
+        vo.put("newBugPreview", preview == null ? null : JSON.parseObject(preview));
         vo.put("actionBugCount", row.get("actionBugCount"));
         String previews = asStr(row.get("actionBugPreviews"));
         vo.put("actionBugPreviews", previews == null ? new JSONArray() : JSON.parseArray(previews));

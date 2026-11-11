@@ -36,6 +36,18 @@ ok('列表摘要和详情返回同一条问题，其他成员与客户不可见'
 ok('客户仍看到未解决', (await call(client,'GET','/jiedan/portal/orders/'+id)).data.bugs[0].status === 'open')
 ok('解决后从待办移除', good(await call(ta,'PUT',issuePath+'/status',{status:'resolved'})) && Number(await actionCount()) === 0)
 
+const newSummary = async () => (await actionRows(ta)).find(o => o.id === id)
+ok('团队问题不计入新客户问题', Number((await newSummary()).newBugCount) === 0)
+const customerText='首页轮播图第二张打不开'
+const customerIssue = (await call(client,'POST','/jiedan/portal/bug',{orderId:id,content:customerText})).data.bugs.find(x=>x.content===customerText)
+for (const [status,newCount,openCount] of [['open',1,1],['action',0,1],['resolved',0,0]]) {
+  if (status !== 'open') await call(ta,'PUT','/jiedan/order/bug/'+customerIssue.id+'/status',{status})
+  const summary=await newSummary()
+  const detail=(await call(ta,'GET','/jiedan/order/'+id)).data
+  ok('客户问题摘要与详情一致 '+status,[summary,detail].every(o=>Number(o.newBugCount)===newCount &&
+    Number(o.openBugCount)===openCount && (newCount ? o.newBugPreview?.id===customerIssue.id && o.newBugPreview.content===customerText : !o.newBugPreview)))
+}
+
 const customerStatusPath = '/jiedan/portal/bug/' + issueId + '/status'
 const version = async () => Number((await call(ta,'GET',`/jiedan/order/${id}/version`)).data.version)
 const previousVersion = await version()
