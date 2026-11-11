@@ -149,7 +149,7 @@ public class AgentLinkService
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public String read(String token, boolean all, String requestOrigin)
+    public String read(String token, boolean all, String requestOrigin, boolean html)
     {
         if (!token.matches("[A-Za-z0-9_-]{43}")) return null;
         String digest = DigestUtils.sha256Hex(token);
@@ -175,7 +175,7 @@ public class AgentLinkService
         Map<String, Object> project = projects.get(0);
         String text = IssueSheet.render((String) project.get("title"), (String) project.get("order_no"),
                 (String) project.get("customer"), (String) project.get("customer_account"), bugs.selectByOrderId(id),
-                updates.selectByOrderId(id), origin(requestOrigin), Instant.ofEpochMilli(now), all);
+                updates.selectByOrderId(id), origin(requestOrigin), Instant.ofEpochMilli(now), all, html);
         db.update("update jiedan_agent_link set last_read_at=utc_timestamp(),read_window=? where order_id=?", String.join(",", window), id);
         return text;
     }

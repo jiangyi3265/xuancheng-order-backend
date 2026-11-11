@@ -96,6 +96,8 @@ public class JiedanAttachmentStorage
         if ("gif".equals(ext)) return "image/gif";
         if ("webp".equals(ext)) return "image/webp";
         if ("svg".equals(ext)) return "image/svg+xml";
+        if ("bmp".equals(ext)) return "image/bmp";
+        if ("avif".equals(ext)) return "image/avif";
         if ("mp4".equals(ext)) return "video/mp4";
         if ("webm".equals(ext)) return "video/webm";
         if ("mp3".equals(ext)) return "audio/mpeg";

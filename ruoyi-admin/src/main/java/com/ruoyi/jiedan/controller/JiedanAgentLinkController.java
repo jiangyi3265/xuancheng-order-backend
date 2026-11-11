@@ -5,6 +5,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
+import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,17 +44,38 @@ public class JiedanAgentLinkController
 
     @Anonymous
     @GetMapping("/sheet/{token}")
-    public ResponseEntity<byte[]> sheet(@PathVariable String token, @RequestParam(defaultValue = "") String scope, HttpServletRequest request)
+    public ResponseEntity<byte[]> sheet(@PathVariable String token, @RequestParam(defaultValue = "") String scope,
+                                        @RequestParam(defaultValue = "") String format, HttpServletRequest request)
     {
         try
         {
-            String text = links.read(token, "all".equals(scope), requestOrigin(request));
-            return text == null ? response(404, "plain", "找不到") : response(200, "markdown", text);
+            boolean html = "html".equals(format) || (format.isEmpty() && prefersHtml(request.getHeader("Accept")));
+            String text = links.read(token, "all".equals(scope), requestOrigin(request), html);
+            return text == null ? response(404, "plain", "找不到") : response(200, html ? "html" : "markdown", text);
         }
         catch (AgentLinkService.RateLimit limited)
         {
             return response(429, "plain", "读取太频繁，请稍后再试");
         }
+    }
+
+    private boolean prefersHtml(String accept)
+    {
+        if (accept == null || accept.isEmpty()) return false;
+        double html = 0, markdown = 0;
+        try
+        {
+            for (MediaType type : MediaType.parseMediaTypes(accept))
+            {
+                if ("text".equalsIgnoreCase(type.getType()))
+                {
+                    if ("html".equalsIgnoreCase(type.getSubtype())) html = Math.max(html, type.getQualityValue());
+                    if ("markdown".equalsIgnoreCase(type.getSubtype())) markdown = Math.max(markdown, type.getQualityValue());
+                }
+            }
+        }
+        catch (InvalidMediaTypeException malformed) { return false; }
+        return html > 0 && html >= markdown;
     }
 
     // Production nginx connects over loopback and preserves Host. Forwarded headers supplied
@@ -75,7 +97,10 @@ public class JiedanAgentLinkController
     {
         ResponseEntity.BodyBuilder builder = ResponseEntity.status(status).cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").header("Referrer-Policy", "no-referrer")
-                .header("X-Robots-Tag", "noindex, nofollow").header("Content-Security-Policy", "default-src 'none'; sandbox")
+                .header("X-Robots-Tag", "noindex, nofollow").varyBy("Accept")
+                .header("Content-Security-Policy", "html".equals(subtype)
+                        ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox allow-same-origin"
+                        : "default-src 'none'; sandbox")
                 .contentType(new MediaType("text", subtype, StandardCharsets.UTF_8));
         if (status == 429) builder.header("Retry-After", "60");
         return builder.body(text.getBytes(StandardCharsets.UTF_8));
