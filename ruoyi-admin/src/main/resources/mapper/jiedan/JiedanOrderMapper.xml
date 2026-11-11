@@ -115,6 +115,7 @@
             o.owner_id as ownerId,
             o.status as status,
             o.handled as handled,
+            <include refid="urgentHandoffJson"/> as urgentHandoff,
             date_format(o.urgent_until, '%Y-%m-%d %H:%i') as urgentUntil,
             date_format(o.handled_time, '%Y-%m-%d %H:%i:%s') as handledTime,
             o.priority as priority,
@@ -148,6 +149,10 @@
               json_object('id',nb.id,'content',case when nb.sheet_chars=0 or nb.content='附件需求' then ''
               else left(substring_index(substring_index(coalesce(nb.content,''),concat(char(10),'联系方式：'),1),concat(char(10),'参考预算：'),1),40) end)
             end as newBugPreview,
+            case when bc.internal_count > 0 then (
+              select json_arrayagg(json_object('id',b.id,'content',left(coalesce(b.content,''),120)))
+              from jiedan_bug b where b.order_id=o.id and b.status='ai_review'
+            ) end as internalReviewIssues,
             bc.last_bug_id as lastBugId,
             bc.action_bug_id as actionBugId,
             lt.id as lastMessageId,
@@ -166,8 +171,10 @@
             le.content as lastEventContent,
             le.create_time as lastEventTime
         from jiedan_order o
+        <include refid="urgentHandoffJoins"/>
         left join (
             select order_id, count(*) as bug_count, max(id) as last_bug_id,
+                   sum(status='ai_review') as internal_count,
                    sum(is_new) as new_count, max(if(is_new,id,null)) as latest_new,
                    sum(ifnull(status,'open') in ('open','action')) as open_count,
                    max(case when status = 'action' then id end) as action_bug_id,
@@ -273,6 +280,28 @@
         <if test="ownerScope != null">and owner_id = #{ownerScope}</if>
         for update
     </select>
+
+    <sql id="urgentHandoffJson">
+        if(h.order_id is null, null, json_object('requesterId', h.requester_id, 'requesterName', u.nick_name,
+           'due', date_format(h.due_at,'%Y-%m-%d %H:%i'), 'submittedBy', h.submitted_by,
+           'submittedAt', date_format(h.submitted_at,'%Y-%m-%d %H:%i:%s'), 'submittedName', s.nick_name))
+    </sql>
+    <sql id="urgentHandoffJoins">
+        left join jiedan_urgent_handoff h on h.order_id=o.id
+        left join sys_user u on u.user_id=h.requester_id
+        left join sys_user s on s.user_id=h.submitted_by
+    </sql>
+    <select id="selectUrgentHandoff" resultType="String">
+        select <include refid="urgentHandoffJson"/> from jiedan_order o <include refid="urgentHandoffJoins"/> where o.id=#{id}
+    </select>
+    <insert id="saveUrgentHandoff">
+        insert into jiedan_urgent_handoff (order_id,requester_id,due_at) values (#{id},#{sender},#{due})
+        on duplicate key update requester_id=values(requester_id),due_at=values(due_at),submitted_by=null,submitted_at=null
+    </insert>
+    <update id="submitUrgentHandoff">
+        update jiedan_urgent_handoff set submitted_by=#{actor},submitted_at=now() where order_id=#{id}
+    </update>
+    <delete id="deleteUrgentHandoff">delete from jiedan_urgent_handoff where order_id=#{id}</delete>
 
     <update id="updateUrgentUntil">
         update jiedan_order set urgent_until = #{urgentUntil,jdbcType=TIMESTAMP}, update_time = now(), version = version + 1

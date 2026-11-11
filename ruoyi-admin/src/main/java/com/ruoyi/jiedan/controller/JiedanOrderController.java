@@ -103,6 +103,13 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.income());
     }
 
+    @PostMapping("/{id}/urgent-review")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult reviewUrgency(@PathVariable Long id, @RequestBody Map<String, Object> body)
+    {
+        return AjaxResult.success(service.reviewUrgency(id, body));
+    }
+
     @PutMapping("/{id}/urgency")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult setUrgency(@PathVariable Long id, @RequestBody Map<String, Object> body)

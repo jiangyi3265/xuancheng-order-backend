@@ -949,3 +949,12 @@ CREATE TABLE IF NOT EXISTS jiedan_agent_reply_key (
  read_hash char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
  FOREIGN KEY (order_id) REFERENCES jiedan_order(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS jiedan_urgent_handoff (
+  order_id bigint NOT NULL PRIMARY KEY,
+  requester_id bigint NOT NULL,
+  due_at datetime NOT NULL,
+  submitted_by bigint DEFAULT NULL,
+  submitted_at datetime DEFAULT NULL,
+  CONSTRAINT fk_urgent_handoff_order FOREIGN KEY (order_id) REFERENCES jiedan_order(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

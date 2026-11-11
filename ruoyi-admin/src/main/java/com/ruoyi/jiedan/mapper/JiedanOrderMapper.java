@@ -19,6 +19,11 @@ public interface JiedanOrderMapper
 
     int updateUrgentUntil(@Param("id") Long id, @Param("urgentUntil") String urgentUntil);
 
+    String selectUrgentHandoff(Long id);
+    void saveUrgentHandoff(@Param("id") Long id, @Param("sender") Long sender, @Param("due") String due);
+    void submitUrgentHandoff(@Param("id") Long id, @Param("actor") Long actor);
+    void deleteUrgentHandoff(Long id);
+
     int updateHandling(@Param("id") Long id, @Param("handled") boolean handled, @Param("time") java.util.Date time);
 
     void beginReceipt(@Param("id") Long id, @Param("key") String key, @Param("recipient") Long recipient, @Param("entry") Long entry);
