@@ -50,6 +50,14 @@ public class JiedanAgentLinkController
         return AjaxResult.success(links.replyKey(id,"enable".equals(action),readerId));
     }
 
+    @PreAuthorize("@ss.hasRole('admin')")
+    @PostMapping("/orders/{id}/reply-reader")
+    public AjaxResult changeReader(@PathVariable long id, @RequestParam(required=false) Long readerId, HttpServletResponse response)
+    {
+        response.setHeader("Cache-Control","no-store");
+        return AjaxResult.success(links.changeReader(id,readerId));
+    }
+
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     @GetMapping("/reports")
     public AjaxResult reports(HttpServletResponse response)

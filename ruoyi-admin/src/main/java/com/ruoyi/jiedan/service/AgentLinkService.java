@@ -72,7 +72,7 @@ public class AgentLinkService
                 + " date_format(date_add(expires_at, interval 8 hour), '%Y-%m-%d %H:%i:%s') as expiresAt,"
                 + " date_format(date_add(last_read_at, interval 8 hour), '%Y-%m-%d %H:%i:%s') as lastReadAt"
                 + ", (select left(sha2(k.secret_hash,256),24) from jiedan_agent_reply_key k where k.order_id=l.order_id and k.read_hash=l.token_hash) as replyRevision"
-                + " from jiedan_agent_link l where l.order_id=?", id);
+                + ", k.reader_id as replyReaderId from jiedan_agent_link l left join jiedan_agent_reply_key k on k.order_id=l.order_id where l.order_id=?", id);
         if (!rows.isEmpty()) return new LinkedHashMap<>(rows.get(0));
         Map<String, Object> empty = new LinkedHashMap<>();
         empty.put("state", "none");
@@ -143,6 +143,18 @@ public class AgentLinkService
                 + "on duplicate key update secret_hash=values(secret_hash),read_hash=values(read_hash),reader_id=values(reader_id)", DigestUtils.sha256Hex(secret), reader, id);
         if (changed == 0) throw new ServiceException("请先生成有效的 AI 只读链接");
         return Map.of("secret", secret, "replyRevision", status(id).get("replyRevision"));
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String,Object> changeReader(long id, Long reader)
+    {
+        projectForMember(id);
+        if (reader != null && !access.isAssignable(reader)) throw new ServiceException("请选择有效的协作成员");
+        Map<String,Object> current = status(id);
+        if (!"active".equals(current.get("state")) || current.get("replyRevision") == null)
+            throw new ServiceException("请先开启回复权限");
+        db.update("update jiedan_agent_reply_key set reader_id=? where order_id=?", reader, id);
+        return status(id);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
