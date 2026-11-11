@@ -42,6 +42,31 @@ public class JiedanAgentLinkController
         return AjaxResult.success(links.change(id, action, requestOrigin(request)));
     }
 
+    @PreAuthorize("@ss.hasRole('admin')")
+    @PostMapping("/orders/{id}/reply-key/{action:enable|disable}")
+    public AjaxResult replyKey(@PathVariable long id, @PathVariable String action, @RequestParam(required=false) Long readerId, HttpServletResponse response)
+    {
+        response.setHeader("Cache-Control","no-store");
+        return AjaxResult.success(links.replyKey(id,"enable".equals(action),readerId));
+    }
+
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    @GetMapping("/reports")
+    public AjaxResult reports(HttpServletResponse response)
+    {
+        response.setHeader("Cache-Control","no-store");
+        return AjaxResult.success(links.reports());
+    }
+
+    @Anonymous
+    @PostMapping("/issue-reports/{bug}")
+    public AjaxResult report(@PathVariable long bug, @org.springframework.web.bind.annotation.RequestHeader(value="X-Codex-Reply-Key",required=false) String key,
+                             @org.springframework.web.bind.annotation.RequestBody java.util.Map<String,String> body)
+    {
+        links.reply(bug,key,body);
+        return AjaxResult.success();
+    }
+
     @Anonymous
     @GetMapping("/sheet/{token}")
     public ResponseEntity<byte[]> sheet(@PathVariable String token, @RequestParam(defaultValue = "") String scope,

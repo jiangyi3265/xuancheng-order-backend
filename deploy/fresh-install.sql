@@ -942,3 +942,10 @@ UPDATE jiedan_bug b JOIN jiedan_intake_receipt r ON r.bug_id=b.id AND r.order_id
 LEFT JOIN sys_user u ON u.user_id=r.customer_id
 SET b.sender_kind=IF(b.created_by=u.user_name, 'old_account', 'old_intake')
 WHERE b.sender_kind IS NULL;
+CREATE TABLE IF NOT EXISTS jiedan_agent_reply_key (
+ order_id bigint NOT NULL PRIMARY KEY,
+ secret_hash char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL UNIQUE,
+ reader_id bigint DEFAULT NULL,
+ read_hash char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ FOREIGN KEY (order_id) REFERENCES jiedan_order(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

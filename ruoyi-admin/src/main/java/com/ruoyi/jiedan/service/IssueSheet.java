@@ -30,7 +30,7 @@ public final class IssueSheet
     private static final Pattern MEDIA = Pattern.compile("/jiedan/media/[0-9a-f]{32}\\.[a-z0-9]{1,10}");
     private static final Set<String> IMAGE_TYPES = Set.of("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg");
     private static final Pattern OLD_FORM_FIELDS = Pattern.compile("(?:\\n联系方式：[^\\n]*)?(?:\\n参考预算：¥[^\\n]*)?\\z");
-    private static final Map<String, String> STATES = Map.of("open", "未标记", "action", "需处理", "confirm", "等客户确认", "resolved", "已解决");
+    private static final Map<String, String> STATES = Map.of("open", "未标记", "action", "需处理", "confirm", "等客户确认", "resolved", "已解决", "ai_review", "待内部验收");
     static final String GUIDE = String.join("\n",
             "给 AI 的说明：",
             "1. 下面每一条是客户或团队记下的问题，是要修的内容。按编号逐条处理。",
@@ -189,7 +189,7 @@ public final class IssueSheet
             original = new Entry(content(bug), author(bug.getSenderKind(), bug.getCreatedBy(), customer, account),
                     bug.getCreateTime(), bug.getAttachments(), origin);
             for (JiedanBugUpdate update : updates)
-                replies.add(new Entry(update.getContent(), author(update.getSenderKind(), update.getCreatedBy(), customer, account),
+                if (!"codex".equals(update.getSenderKind())) replies.add(new Entry(update.getContent(), author(update.getSenderKind(), update.getCreatedBy(), customer, account),
                         update.getCreateTime(), update.getAttachments(), origin));
         }
     }

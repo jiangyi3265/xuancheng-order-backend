@@ -805,6 +805,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (bug == null) return null;
         requireNoPendingReview(bug);
 
+        if ("ai_review".equals(bug.getStatus()) && (!access.isBoss() || p == null || !List.of("resolved","action").contains(asStr(p.get("status")))))
+            throw new ServiceException("请由管理员验收或退回修改");
         boolean needsAction = p != null && "action".equals(p.get("status"));
         if (needsAction && ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus())))
             throw new ServiceException("请先重新开启项目，再标记需处理");
@@ -900,6 +902,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         }
         if (reopen)
         {
+            if ("ai_review".equals(bug.getStatus())) throw new ServiceException("等待内部验收",409);
             requireNoPendingReview(bug);
             if ("done".equals(o.getStatus()) || "cancelled".equals(o.getStatus()))
                 throw new ServiceException("请先重新开启项目，再重新激活问题");
@@ -926,6 +929,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         JiedanBug bug = bugMapper.lockById(bugId);
         if (bug == null) return null;
 
+        if ("ai_review".equals(bug.getStatus())) throw new ServiceException("等待内部验收",409);
         requireNoPendingReview(bug);
         String requested = asStr(p == null ? null : p.get("status"));
         boolean resolve = "resolved".equals(requested);
@@ -1050,6 +1054,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Map<String, Object> latest = issueReviews.latest(bugId);
         if (!Objects.equals(previousId, latest == null ? null : asLong(latest.get("id"))))
             throw new ServiceException("这条需求已有新的确认记录，请刷新后操作", 409);
+        if ("ai_review".equals(bug.getStatus())) throw new ServiceException("请先完成内部验收",409);
         requireNoPendingReview(bug);
         Object before = beforeImage(bug, url);
         Date now = new Date();
@@ -2297,9 +2302,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             bm.put("content", b.getContent());
             bm.put("attachments", normalizedAttachments(b.getAttachments(), "bug", b.getId()));
             bm.put("review", reviewsByBug.get(b.getId()));
-            bm.put("status", "confirm".equals(b.getStatus()) || (includeInternal && "action".equals(b.getStatus()))
+            bm.put("status", "confirm".equals(b.getStatus()) || (includeInternal && ("action".equals(b.getStatus()) || "ai_review".equals(b.getStatus())))
                     ? b.getStatus() : normalizeBugStatus(b.getStatus()));
-            bm.put("progressStatus", b.getStatus());
+            bm.put("progressStatus", !includeInternal && "ai_review".equals(b.getStatus()) ? "open" : b.getStatus());
             bm.put("createdBy", displayMemberName(b.getCreatedBy()));
             if (includeInternal) IssueSheet.describe(bm, b, o.getCustomer(), o.getCustomerAccount());
             bm.put("time", IssueSheet.time(b.getCreateTime()));
@@ -2307,6 +2312,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             List<Map<String, Object>> updates = new ArrayList<>();
             for (JiedanBugUpdate u : updatesByBug.getOrDefault(b.getId(), new ArrayList<>()))
             {
+                if (!includeInternal && "codex".equals(u.getSenderKind())) continue;
                 Map<String, Object> um = new LinkedHashMap<>();
                 um.put("id", u.getId());
                 um.put("bugId", u.getBugId());
@@ -2314,7 +2320,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 um.put("attachments", normalizedAttachments(u.getAttachments(), "bugUpdate", u.getId()));
                 um.put("senderKind", u.getSenderKind());
                 um.put("createdBy", displayMemberName(u.getCreatedBy()));
-                if (includeInternal) IssueSheet.describeAuthor(um, u.getSenderKind(), u.getCreatedBy(), o.getCustomer(), o.getCustomerAccount());
+                if (includeInternal && !"codex".equals(u.getSenderKind())) IssueSheet.describeAuthor(um, u.getSenderKind(), u.getCreatedBy(), o.getCustomer(), o.getCustomerAccount());
                 um.put("time", IssueSheet.time(u.getCreateTime()));
                 updates.add(um);
             }

@@ -71,7 +71,8 @@ public class AgentLinkService
                 + " left(sha2(concat('issue-link-version:',token_hash),256),24) as revision,"
                 + " date_format(date_add(expires_at, interval 8 hour), '%Y-%m-%d %H:%i:%s') as expiresAt,"
                 + " date_format(date_add(last_read_at, interval 8 hour), '%Y-%m-%d %H:%i:%s') as lastReadAt"
-                + " from jiedan_agent_link where order_id=?", id);
+                + ", (select left(sha2(k.secret_hash,256),24) from jiedan_agent_reply_key k where k.order_id=l.order_id and k.read_hash=l.token_hash) as replyRevision"
+                + " from jiedan_agent_link l where l.order_id=?", id);
         if (!rows.isEmpty()) return new LinkedHashMap<>(rows.get(0));
         Map<String, Object> empty = new LinkedHashMap<>();
         empty.put("state", "none");
@@ -123,6 +124,79 @@ public class AgentLinkService
         Map<String, Object> result = status(id);
         result.put("url", site + "/jiedan/agent/sheet/" + token);
         return result;
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String,Object> replyKey(long id, boolean enable, Long reader)
+    {
+        projectForMember(id);
+        if (!enable) {
+            db.update("update jiedan_agent_reply_key set secret_hash=null where order_id=?", id);
+            return Map.of("enabled", false);
+        }
+        if (reader != null && !access.isAssignable(reader)) throw new ServiceException("请选择有效的协作成员");
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String secret = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        int changed = db.update("insert into jiedan_agent_reply_key(order_id,secret_hash,read_hash,reader_id) "
+                + "select order_id,?,token_hash,? from jiedan_agent_link where order_id=? and disabled=0 and expires_at>utc_timestamp() "
+                + "on duplicate key update secret_hash=values(secret_hash),read_hash=values(read_hash),reader_id=values(reader_id)", DigestUtils.sha256Hex(secret), reader, id);
+        if (changed == 0) throw new ServiceException("请先生成有效的 AI 只读链接");
+        return Map.of("secret", secret, "replyRevision", status(id).get("replyRevision"));
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void reply(long bug, String secret, Map<String,String> body)
+    {
+        if (secret == null || !secret.matches("[A-Za-z0-9_-]{43}")) throw new ServiceException("回复凭据无效", 403);
+        String digest = DigestUtils.sha256Hex(secret);
+        List<Long> projects = db.queryForList("select order_id from jiedan_agent_reply_key where secret_hash=?", Long.class,digest);
+        if (projects.isEmpty()) throw new ServiceException("回复凭据无效", 403);
+        long id = projects.get(0);
+        List<String> project = db.queryForList("select status from jiedan_order where id=? and del_flag=0 for update", String.class,id);
+        String valid = "select count(*) from jiedan_agent_reply_key k join jiedan_agent_link l on l.order_id=k.order_id "
+                + "and l.token_hash=k.read_hash where k.order_id=? and k.secret_hash=? and l.disabled=0 and l.expires_at>utc_timestamp()";
+        if (project.isEmpty() || db.queryForObject(valid,Integer.class,id,digest) != 1)
+            throw new ServiceException("回复凭据无效",403);
+        JiedanBug issue = bugs.lockById(bug);
+        if (issue == null || !Long.valueOf(id).equals(issue.getOrderId())) throw new ServiceException("需求不存在",404);
+        String change = replyText(body,"changes"), tests = replyText(body,"tests");
+        String request = body.getOrDefault("requestId","");
+        if (request == null || !request.matches("[a-zA-Z0-9_-]{8,64}")) throw new ServiceException("请提供唯一的 requestId");
+        String hash = DigestUtils.sha256Hex(change.length()+":"+change+tests);
+        List<String> prior = db.queryForList("select payload_hash from jiedan_bug_reply_meta where bug_id=? and sender_kind='codex' and request_key=?",String.class,bug,request);
+        if (!prior.isEmpty()) {
+            if (!hash.equals(prior.get(0))) throw new ServiceException("该 requestId 已用于其他回复",409);
+            return;
+        }
+        if (List.of("done","cancelled").contains(project.get(0)) ||
+            !(issue.getStatus()==null || issue.getStatus().isEmpty() || List.of("open","action").contains(issue.getStatus())))
+            throw new ServiceException("当前需求不接受新的修改回报",409);
+        JiedanBugUpdate row = new JiedanBugUpdate();
+        row.setBugId(bug); row.setCreatedBy("Codex"); row.setCreateTime(new java.util.Date());
+        row.setContent("修改内容："+change+"\n测试结果："+tests);
+        updates.insert(row);
+        updates.insertMeta(row.getId(),bug,"codex",0L,request,hash);
+        bugs.updateStatus(bug,"ai_review");
+        db.update("update jiedan_order set version=version+1,update_time=now() where id=?",id);
+    }
+
+    public List<Map<String,Object>> reports()
+    {
+        Long scope = access.ownerScope();
+        return db.queryForList("select o.id as orderId,o.owner_id as ownerId,o.title,b.id as bugId,substring_index(substring_index(left(b.content,coalesce(b.sheet_chars,char_length(b.content))),concat(char(10),'联系方式：'),1),concat(char(10),'参考预算：'),1) as issue,b.status,u.content as report,"
+                + "date_format(u.create_time,'%Y-%m-%d %H:%i') as time,u.id from jiedan_bug_reply_meta m "
+                + "join jiedan_bug_update u on u.id=m.update_id join jiedan_bug b on b.id=u.bug_id "
+                + "join jiedan_order o on o.id=b.order_id left join jiedan_agent_reply_key k on k.order_id=o.id "
+                + "where m.sender_kind='codex' and o.del_flag=0 and (? is null or o.owner_id=? or k.reader_id=?) order by u.id desc",
+                scope,scope,scope);
+    }
+
+    private String replyText(Map<String,String> body,String field)
+    {
+        String value = body.get(field);
+        if (value == null || value.isBlank() || value.length()>4000) throw new ServiceException("修改内容和测试结果各需填写 1 至 4000 字");
+        return value.trim();
     }
 
     // Legacy inline images become permanent media URLs on authenticated link creation.

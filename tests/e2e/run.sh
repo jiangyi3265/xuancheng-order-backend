@@ -137,6 +137,7 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     mysql_db "$DB" < "$ROOT/deploy/upgrade_customer_issue_replies_v1.sql" || die "客户回复已读升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_customer_issue_confirm_v1.sql" || die "客户需求确认升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_ai_issue_sheet_v1.sql" || die "AI 清单升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_codex_reply.sql" || die "回复权限升级失败"
   done
   echo "   升级脚本各执行两遍（含幂等性）：成功"
   AFTER="$(data_fingerprint)"
