@@ -376,6 +376,10 @@
     </update>
 
     <!-- 放进回收站（软删除）；只会处理还没删除的项目 -->
+    <update id="disableAgentLink">
+        update jiedan_agent_link set disabled = 1 where order_id = #{id} and disabled = 0
+    </update>
+
     <update id="softDelete">
         update jiedan_order
         set del_flag = 1, delete_time = #{time}, delete_by = #{by}, delete_by_id = #{byId},

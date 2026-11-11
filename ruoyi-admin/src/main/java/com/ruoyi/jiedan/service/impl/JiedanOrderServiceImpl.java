@@ -47,6 +47,7 @@ import com.ruoyi.jiedan.mapper.JiedanSettingMapper;
 import com.ruoyi.jiedan.mapper.JiedanTimelineMapper;
 import com.ruoyi.jiedan.service.IJiedanOrderService;
 import com.ruoyi.jiedan.service.JiedanAccess;
+import com.ruoyi.jiedan.service.IssueSheet;
 import com.ruoyi.jiedan.service.JiedanAttachmentStorage;
 import com.ruoyi.jiedan.service.JiedanAuditService;
 import com.ruoyi.jiedan.service.JiedanPushService;
@@ -110,12 +111,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         put("high", "高");
         put("medium", "中");
         put("low", "低");
-    }};
-
-    private static final Map<String, String> LEGACY_MEMBER_NAMES = new LinkedHashMap<String, String>()
-    {{
-        put("阿成", "尚琦凯");
-        put("阿伟", "费鹏飞");
     }};
 
     private static final Map<String, String> STATUS_LABELS = new LinkedHashMap<String, String>()
@@ -438,6 +433,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         List<String> lines = new ArrayList<>();
         if (!title.isEmpty()) lines.add(title);
         if (!description.isEmpty() && !description.equals(title)) lines.add(description);
+        int publicLength = String.join("\n", lines).length();
         if (lines.isEmpty()) lines.add("附件需求");
         if (!contact.isEmpty()) lines.add("联系方式：" + contact);
         if (asDecimal(p.get("amount")).signum() > 0) lines.add("参考预算：¥" + money(asDecimal(p.get("amount"))));
@@ -446,8 +442,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             throw new ServiceException("需求说明太长，请将详细内容放在附件里");
 
         Date now = new Date();
-        String author = strOr(SecurityUtils.getLoginUser().getUser().getNickName(), account);
-        JiedanBug bug = insertBug(projectId, author, content, p.get("attachments"), now);
+        String author = publicCustomerName(SecurityUtils.getLoginUser().getUser().getNickName(), account);
+        JiedanBug bug = insertBug(projectId, author, content, p.get("attachments"), now, "customer", publicLength, false);
         markUnreadForCustomerAction(project, now);
         notifyNewBug(project, bug, null);
         Map<String, Object> receipt = new LinkedHashMap<>();
@@ -650,6 +646,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         orderMapper.softDelete(id, byName, by, new Date());
+        orderMapper.disableAgentLink(id);
         audit.record("order.delete", "order", id, o.getTitle(), "移入回收站");
         pushRecipients(o, by, "🗑 项目已删除", o.getTitle() + dash(o.getCustomer()) + "（" + byName + "，可在回收站恢复）");
     }
@@ -672,6 +669,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             throw new ServiceException("请在修改需求中选择要撤回的那一条");
         String byName = "客户：" + access.currentName();
         orderMapper.softDelete(id, byName, null, new Date());
+        orderMapper.disableAgentLink(id);
         audit.record("order.delete", "order", id, o.getTitle(), "客户撤回（移入回收站）");
         pushRecipients(o, null, "🗑 客户撤回了项目", o.getTitle() + dash(o.getCustomer()));
         return true;
@@ -749,9 +747,15 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         Date now = new Date();
-        JiedanBug bug = insertBug(o.getId(), byName, asStr(p.get("content")), p.get("attachments"), now);
+        boolean sendToOwner = Boolean.TRUE.equals(p.get("needsAction"));
+        if (sendToOwner && (o.getOwnerId() == null || "done".equals(o.getStatus()) || "cancelled".equals(o.getStatus())))
+            throw new ServiceException("请先设置进行中的项目和负责人");
+        JiedanBug bug = insertBug(o.getId(), byName, asStr(p.get("content")), p.get("attachments"), now, "team", null, sendToOwner);
         touchUnread(o, by, now);
-        notifyNewBug(o, bug, by);
+        if (sendToOwner)
+            pushService.pushToTarget(o.getOwnerId(), "问题需处理 #" + bug.getId() + " · " + o.getTitle(),
+                    excerpt(strOr(bug.getContent(), "请查看问题附件")), NoticeTarget.bug(o.getId(), bug.getId()));
+        else notifyNewBug(o, bug, by);
         return voOf(o.getId());
     }
 
@@ -827,8 +831,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (isBlankBug(p.get("content"), p.get("attachments"))) return null;
 
         Date now = new Date();
-        String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
-        JiedanBug bug = insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now);
+        String name = publicCustomerName(strOr(customerName, o.getCustomer()), account);
+        JiedanBug bug = insertBug(orderId, name, asStr(p.get("content")), p.get("attachments"), now, "customer", null, false);
 
         markUnreadForCustomerAction(o, now);
         notifyNewBug(o, bug, null);
@@ -903,7 +907,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             clearBugReceipt(bug);
         }
         Date now = new Date();
-        String name = strOr(customerName, strOr(o.getCustomer(), "客户"));
+        String name = publicCustomerName(strOr(customerName, o.getCustomer()), account);
         JiedanBugUpdate reply = insertBugUpdate(bugId, name, asStr(p.get("content")), p.get("attachments"), now);
         bugUpdateMapper.insertMeta(reply.getId(), bugId, "customer", customerId, key.isEmpty() ? null : key, hash);
 
@@ -1098,7 +1102,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (issueReviews.decide(reviewId, state, hash) != 1) throw new ServiceException("确认状态已更新", 409);
         Date now = new Date();
         String message = accept ? "已确认这条需求" : "还要调整：" + strOr(note, "请看附件");
-        JiedanBugUpdate response = insertBugUpdate(bugId, access.currentName(), message, files, now);
+        JiedanBugUpdate response = insertBugUpdate(bugId, publicCustomerName(access.currentName(), account), message, files, now);
         bugUpdateMapper.insertMeta(response.getId(), bugId, "customer", me, null, null);
         bugUpdateMapper.markSeen(me, bugId, reviewId);
         bugMapper.updateStatus(bugId, accept ? "resolved" : "action");
@@ -2144,13 +2148,20 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return t.getId();
     }
 
-    private JiedanBug insertBug(Long orderId, String user, String content, Object attachments, Date time)
+    private String publicCustomerName(String name, String account)
+    {
+        return name == null || name.isBlank() || name.equals(account) ? "客户" : name;
+    }
+
+    private JiedanBug insertBug(Long orderId, String user, String content, Object attachments, Date time, String sender, Integer sheetChars, boolean actionable)
     {
         JiedanBug bug = new JiedanBug();
         bug.setOrderId(orderId);
         bug.setContent(content);
-        bug.setAttachments(jsonStr(attachments));
-        bug.setStatus("open");
+        bug.setAttachments(attachmentStorage.normalize(jsonStr(attachments)).getJson());
+        bug.setStatus(actionable ? "action" : "open");
+        bug.setSenderKind(sender);
+        bug.setSheetChars(sheetChars);
         bug.setCreatedBy(user);
         bug.setCreateTime(time);
         bugMapper.insert(bug);
@@ -2162,7 +2173,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         JiedanBugUpdate update = new JiedanBugUpdate();
         update.setBugId(bugId);
         update.setContent(content);
-        update.setAttachments(jsonStr(attachments));
+        update.setAttachments(attachmentStorage.normalize(jsonStr(attachments)).getJson());
         update.setCreatedBy(user);
         update.setCreateTime(time);
         bugUpdateMapper.insert(update);
@@ -2259,6 +2270,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             vo.put("collaborators", people);
         }
 
+        if (includeInternal) vo.put("sheetOrigin", IssueSheet.origin(settingMapper.selectValue("push.siteUrl")));
         Map<Long, List<JiedanBugUpdate>> updatesByBug = new LinkedHashMap<>();
         for (JiedanBugUpdate update : bugUpdateMapper.selectByOrderId(o.getId()))
         {
@@ -2289,7 +2301,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                     ? b.getStatus() : normalizeBugStatus(b.getStatus()));
             bm.put("progressStatus", b.getStatus());
             bm.put("createdBy", displayMemberName(b.getCreatedBy()));
-            bm.put("time", fmt(b.getCreateTime()));
+            if (includeInternal) IssueSheet.describe(bm, b, o.getCustomer(), o.getCustomerAccount());
+            bm.put("time", IssueSheet.time(b.getCreateTime()));
 
             List<Map<String, Object>> updates = new ArrayList<>();
             for (JiedanBugUpdate u : updatesByBug.getOrDefault(b.getId(), new ArrayList<>()))
@@ -2301,7 +2314,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 um.put("attachments", normalizedAttachments(u.getAttachments(), "bugUpdate", u.getId()));
                 um.put("senderKind", u.getSenderKind());
                 um.put("createdBy", displayMemberName(u.getCreatedBy()));
-                um.put("time", fmt(u.getCreateTime()));
+                if (includeInternal) IssueSheet.describeAuthor(um, u.getSenderKind(), u.getCreatedBy(), o.getCustomer(), o.getCustomerAccount());
+                um.put("time", IssueSheet.time(u.getCreateTime()));
                 updates.add(um);
             }
             bm.put("updates", updates);
@@ -2476,7 +2490,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     private String displayMemberName(String name)
     {
-        return name == null ? null : LEGACY_MEMBER_NAMES.getOrDefault(name, name);
+        return IssueSheet.memberName(name);
     }
 
     private boolean isBlankBug(Object content, Object attachments)

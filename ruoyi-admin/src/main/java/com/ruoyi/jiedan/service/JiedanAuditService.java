@@ -40,28 +40,34 @@ public class JiedanAuditService
     {
         try
         {
-            Long actorId = null;
-            String actorName = "系统";
-            String actorRole = "system";
-            try
-            {
-                LoginUser lu = SecurityUtils.getLoginUser();
-                actorId = lu.getUserId();
-                actorName = access.currentName();
-                actorRole = roleCode(lu);
-            }
-            catch (Exception noLogin)
-            {
-                // 没有登录用户：保持“系统”
-            }
-            mapper.insert(new Date(), actorId, cut(actorName, 64), actorRole, action,
-                    targetType == null ? "" : targetType, targetId,
-                    cut(targetName, NAME_MAX), cut(detail, DETAIL_MAX), clientIp());
+            recordRequired(action, targetType, targetId, targetName, detail);
         }
         catch (Exception e)
         {
             log.warn("写操作日志失败 action={} target={}", action, targetId, e);
         }
+    }
+
+    /** 链接管理与日志必须在同一事务提交；写日志失败由调用方回滚。 */
+    public void recordRequired(String action, String targetType, Long targetId, String targetName, String detail)
+    {
+        Long actorId = null;
+        String actorName = "系统";
+        String actorRole = "system";
+        try
+        {
+            LoginUser lu = SecurityUtils.getLoginUser();
+            actorId = lu.getUserId();
+            actorName = access.currentName();
+            actorRole = roleCode(lu);
+        }
+        catch (Exception noLogin)
+        {
+            // 没有登录用户：保持“系统”
+        }
+        mapper.insert(new Date(), actorId, cut(actorName, 64), actorRole, action,
+                targetType == null ? "" : targetType, targetId,
+                cut(targetName, NAME_MAX), cut(detail, DETAIL_MAX), clientIp());
     }
 
     /** 总管理员查日志：分页 + 筛选。 */

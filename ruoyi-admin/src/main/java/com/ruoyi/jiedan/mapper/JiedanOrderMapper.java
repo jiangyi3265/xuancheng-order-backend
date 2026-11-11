@@ -75,6 +75,8 @@ public interface JiedanOrderMapper
 
     int updateNoteAttachmentsOnly(@Param("id") Long id, @Param("attachments") String attachments);
 
+    int disableAgentLink(Long id);
+
     /** 放进回收站 */
     int softDelete(@Param("id") Long id, @Param("by") String by, @Param("byId") Long byId, @Param("time") java.util.Date time);
 

@@ -293,7 +293,7 @@ res = await fetch(`${BASE}/jiedan/wecom/callback`, { method: 'POST', body: '<xml
 ok('收到成员消息时回空串', res.status === 200 && (await res.text()) === '')
 
 // ---- 收尾：清掉企业微信配置，不影响其他测试 ----
-await save(boss, { 'push.wecom.corpId': '', 'push.wecom.agentId': '', 'push.wecom.secret': '', 'push.wecom.token': '', 'push.wecom.aesKey': '', ['push.wecom.user.' + bossId]: '', ['push.wecom.user.' + emp.id]: '', 'push.siteUrl': '' })
+await save(boss, { 'push.enabled': 'false', 'push.wecom.corpId': '', 'push.wecom.agentId': '', 'push.wecom.secret': '', 'push.wecom.token': '', 'push.wecom.aesKey': '', ['push.wecom.user.' + bossId]: '', ['push.wecom.user.' + emp.id]: '', 'push.siteUrl': '' })
 await call(boss, 'DELETE', '/jiedan/order/' + id)
 server.close()
 finish()

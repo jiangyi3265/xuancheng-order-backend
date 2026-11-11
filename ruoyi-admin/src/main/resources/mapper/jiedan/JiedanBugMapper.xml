@@ -7,13 +7,15 @@
         <result property="orderId"     column="order_id"    />
         <result property="content"     column="content"     />
         <result property="attachments" column="attachments" />
+        <result property="senderKind" column="sender_kind"/>
+        <result property="sheetChars" column="sheet_chars"/>
         <result property="status"      column="status"      />
         <result property="createdBy"   column="created_by"  />
         <result property="createTime"  column="create_time" />
     </resultMap>
 
     <sql id="cols">
-        id, order_id, content, attachments, status, created_by, create_time
+        id, order_id, content, attachments, status, created_by, create_time, sender_kind, sheet_chars
     </sql>
 
     <select id="selectByOrderId" parameterType="Long" resultMap="JiedanBugResult">
@@ -58,8 +60,8 @@
     </select>
 
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBug" useGeneratedKeys="true" keyProperty="id">
-        insert into jiedan_bug (order_id, content, attachments, status, created_by, create_time)
-        values (#{orderId}, #{content}, #{attachments}, #{status}, #{createdBy}, #{createTime})
+        insert into jiedan_bug (order_id, content, attachments, status, created_by, create_time, sender_kind, sheet_chars)
+        values (#{orderId}, #{content}, #{attachments}, #{status}, #{createdBy}, #{createTime}, #{senderKind}, #{sheetChars})
     </insert>
 
     <update id="updateStatus">

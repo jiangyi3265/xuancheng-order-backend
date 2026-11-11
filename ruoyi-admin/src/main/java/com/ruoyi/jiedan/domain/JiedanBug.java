@@ -17,6 +17,13 @@ public class JiedanBug
     private String createdBy;
     private Date createTime;
 
+    private String senderKind;
+    private Integer sheetChars;
+    public String getSenderKind() { return senderKind; }
+    public void setSenderKind(String value) { senderKind = value; }
+    public Integer getSheetChars() { return sheetChars; }
+    public void setSheetChars(Integer value) { sheetChars = value; }
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public Long getOrderId() { return orderId; }
