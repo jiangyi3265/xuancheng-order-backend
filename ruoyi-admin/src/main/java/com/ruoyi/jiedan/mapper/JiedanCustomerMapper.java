@@ -16,6 +16,13 @@ public interface JiedanCustomerMapper
      */
     List<Map<String, Object>> selectCustomerAccounts(@Param("ownerId") Long ownerId, @Param("bossId") Long bossId);
 
+    boolean usernameUsed(String username);
+    int reserveShortName(String username);
+    int lockManualName(String username);
+    int beginBatch(@Param("creator") long creator, @Param("key") String key, @Param("hash") String hash);
+    Map<String,Object> lockBatch(@Param("creator") long creator, @Param("key") String key);
+    int finishBatch(@Param("creator") long creator, @Param("key") String key, @Param("result") String result);
+
     /** 删除账号时解绑其名下项目 */
     int clearBinding(String account);
 }

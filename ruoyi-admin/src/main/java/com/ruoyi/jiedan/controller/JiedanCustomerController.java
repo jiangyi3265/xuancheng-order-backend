@@ -1,10 +1,14 @@
 package com.ruoyi.jiedan.controller;
 
-import java.util.List;
+import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
+import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,6 +19,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.alibaba.fastjson2.JSON;
+import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.constant.CacheConstants;
 import com.ruoyi.common.core.domain.model.LoginUser;
@@ -84,12 +90,13 @@ public class JiedanCustomerController extends BaseController
     /** 新建客户账号；总管理员可指定负责人，下属管理员只能建在自己名下 */
     @PostMapping
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public AjaxResult add(@RequestBody Map<String, Object> body)
     {
         String userName = trim(body.get("userName"));
         String nickName = trim(body.get("nickName"));
         String password = body.get("password") == null ? "" : body.get("password").toString();
-        if (StringUtils.isEmpty(userName)) return AjaxResult.error("请填写客户账号");
+        if (StringUtils.isEmpty(userName) && !Boolean.TRUE.equals(body.get("autoUsername"))) return AjaxResult.error("请填写客户账号");
         if (password.length() < 5 || password.length() > 20) return AjaxResult.error("密码长度需为 5-20 位");
 
         Long ownerId = access.currentUserId();
@@ -103,20 +110,87 @@ public class JiedanCustomerController extends BaseController
             }
         }
 
+        if (StringUtils.isEmpty(userName)) userName = allocateShortName();
+        else
+        {
+            customerMapper.lockManualName(userName);
+            SysUser user = new SysUser();
+            user.setUserName(userName);
+            if (!userService.checkUserNameUnique(user)) return AjaxResult.error("账号「" + userName + "」已存在");
+        }
+        return AjaxResult.success("客户账号创建成功", createAccount(userName, nickName, password, ownerId, customerRoleId()));
+    }
+
+    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final String ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+    private static final int MAX_BATCH = 50;
+
+    @PostMapping("/batch")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public AjaxResult batch(@RequestBody Map<String, Object> body)
+    {
+        String key = trim(body.get("requestKey"));
+        if (!key.matches("[A-Za-z0-9_-]{16,64}")) throw new ServiceException("批次标识无效，请重新打开");
+        Long count = asLong(body.get("count"));
+        if (count == null || count < 1 || count > MAX_BATCH) throw new ServiceException("每批可创建 1 至 50 个账号");
+        Object rawNames = body.getOrDefault("names", List.of());
+        if (!(rawNames instanceof List<?>)) throw new ServiceException("请每行输入一个姓名");
+        List<?> supplied = (List<?>) rawNames;
+        if (!supplied.isEmpty() && supplied.size() != count) throw new ServiceException("姓名数量与创建人数不一致");
+        List<String> names = new ArrayList<>();
+        for (Object name : supplied)
+        {
+            String nickname = trim(name);
+            if (!(name instanceof String) || nickname.isEmpty() || nickname.codePointCount(0, nickname.length()) > 30)
+                throw new ServiceException("每个姓名请填写 1 至 30 个字");
+            names.add(nickname);
+        }
+        long creator = access.currentUserId();
+        String hash = DigestUtils.sha256Hex(JSON.toJSONString(List.of(count, names)));
+        customerMapper.beginBatch(creator, key, hash);
+        Map<String,Object> receipt = customerMapper.lockBatch(creator, key);
+        if (!hash.equals(receipt.get("hash"))) throw new ServiceException("此批次已使用，请重新创建");
+        if (receipt.get("result") != null)
+            return AjaxResult.success(JSON.parseArray(receipt.get("result").toString()));
+
+        Long role = customerRoleId();
+        List<Map<String,Object>> accounts = new ArrayList<>();
+        for (int i = 0; i < count; i++)
+        {
+            String username = allocateShortName();
+            accounts.add(createAccount(username, names.isEmpty() ? username : names.get(i), "123456", creator, role));
+        }
+        customerMapper.finishBatch(creator, key, JSON.toJSONString(accounts));
+        return AjaxResult.success(accounts);
+    }
+
+    private String allocateShortName()
+    {
+        while (true)
+        {
+            StringBuilder name = new StringBuilder(8);
+            for (int i = 0; i < 8; i++) name.append(ALPHABET.charAt(RANDOM.nextInt(ALPHABET.length())));
+            String username = name.toString();
+            if (customerMapper.reserveShortName(username) == 0) continue;
+            if (!customerMapper.usernameUsed(username)) return username;
+        }
+    }
+
+    private Map<String,Object> createAccount(String userName, String nickName, String password, Long ownerId, Long role)
+    {
         SysUser user = new SysUser();
         user.setUserName(userName);
-        if (!userService.checkUserNameUnique(user)) return AjaxResult.error("账号「" + userName + "」已存在");
-
         user.setNickName(StringUtils.isEmpty(nickName) ? userName : nickName);
         user.setPassword(SecurityUtils.encryptPassword(password));
         user.setStatus("0");
         user.setCreateBy(SecurityUtils.getUsername());
         user.setRemark("客户账号（后台创建）");
-        user.setRoleIds(new Long[] { customerRoleId() });
+        user.setRoleIds(new Long[] { role });
         userService.insertUser(user);
         accountMapper.upsertOwner(user.getUserId(), ownerId);
         audit.record("customer.create", "customer", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建客户账号；负责人：" + ownerName(ownerId));
-        return AjaxResult.success("客户账号创建成功", Map.of("userId", user.getUserId(), "userName", userName));
+        return Map.of("userId", user.getUserId(), "userName", userName, "nickName", user.getNickName());
     }
 
     /** 重置客户账号密码 */
@@ -198,7 +272,8 @@ public class JiedanCustomerController extends BaseController
     private Long customerRoleId()
     {
         Long id = accountMapper.selectRoleIdByKey("customer");
-        return id != null ? id : 2L; // 兜底：初始化脚本中的客户角色 id
+        if (id == null) throw new ServiceException("缺少客户角色配置");
+        return id;
     }
 
     private String ownerName(Long userId)

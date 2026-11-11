@@ -30,6 +30,28 @@
         order by u.user_id desc
     </select>
 
+    <select id="usernameUsed" resultType="boolean">
+        SELECT EXISTS(SELECT 1 FROM sys_user WHERE user_name=#{username})
+    </select>
+    <insert id="reserveShortName">
+        INSERT IGNORE INTO jiedan_customer_name_reservation(user_name) VALUES(#{username})
+    </insert>
+    <insert id="lockManualName">
+        INSERT INTO jiedan_customer_name_reservation(user_name) VALUES(#{username})
+        ON DUPLICATE KEY UPDATE user_name = user_name
+    </insert>
+    <insert id="beginBatch">
+        INSERT INTO jiedan_customer_batch(creator_id, request_key, payload_hash) VALUES(#{creator},#{key},#{hash})
+        ON DUPLICATE KEY UPDATE creator_id = creator_id
+    </insert>
+    <select id="lockBatch" resultType="java.util.LinkedHashMap">
+        SELECT payload_hash AS hash, CAST(result_json AS CHAR CHARACTER SET utf8mb4) AS result
+        FROM jiedan_customer_batch WHERE creator_id=#{creator} AND request_key=#{key} FOR UPDATE
+    </select>
+    <update id="finishBatch">
+        UPDATE jiedan_customer_batch SET result_json=#{result} WHERE creator_id=#{creator} AND request_key=#{key}
+    </update>
+
     <update id="clearBinding" parameterType="String">
         update jiedan_order
         set customer_account = ''
