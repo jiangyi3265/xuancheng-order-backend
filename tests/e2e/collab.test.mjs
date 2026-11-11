@@ -36,6 +36,8 @@ ok('列表摘要和详情返回同一条问题，其他成员与客户不可见'
 ok('客户仍看到未解决', (await call(client,'GET','/jiedan/portal/orders/'+id)).data.bugs[0].status === 'open')
 ok('解决后从待办移除', good(await call(ta,'PUT',issuePath+'/status',{status:'resolved'})) && Number(await actionCount()) === 0)
 
+ok('同事提交后需要发起人确认', (await call(boss,'GET','/jiedan/order/'+id)).data.internalReviewIssues.some(b=>b.id===issueId))
+ok('发起人确认这条问题',good(await call(boss,'PUT',issuePath+'/status',{status:'resolved',previousStatus:'ai_review'})))
 const newSummary = async () => (await actionRows(ta)).find(o => o.id === id)
 ok('团队问题不计入新客户问题', Number((await newSummary()).newBugCount) === 0)
 const customerText='首页轮播图第二张打不开'
@@ -80,7 +82,7 @@ sql(`update jiedan_order set status='${projectStatus}' where id=${id}`)
     denied(await setHandled(tb, true, before.version)) && denied(await setHandled(client, true, before.version)))
   ok('拒绝非布尔状态和缺失版本',
     denied(await setHandled(ta, 'true', before.version)) && denied(await setHandled(ta, true)))
-  const manual = await setHandled(boss, false, before.version)
+  const manual = await setHandled(ta, false, before.version)
   const repeat = await setHandled(ta, false, before.version)
   ok('首次手动标未处理留下时间，重复提交只记录一次', good(manual) && !!manual.data.handledTime &&
     good(repeat) && manual.data.handledTime === repeat.data.handledTime && manual.data.version === before.version + 1 &&
@@ -156,6 +158,9 @@ sql(`update jiedan_order set status='${projectStatus}' where id=${id}`)
       (await close(boss,kind,changed.version,issueId)).code===403)
   }
   const responses = await Promise.all([close(ta,'next',changed.version),close(ta,'next',changed.version)])
+  const submitted = (await call(boss,'GET',path)).data
+  ok('交给同事的下一步自动回到发起人', submitted.taskTurns.next.requesterId===bossId && !!submitted.taskTurns.next.submittedAt)
+  ok('仅发起人确认后清除下一步', good(await call(boss,'POST',path+'/task-review',{kind:'next',decision:'confirm',version:submitted.version})))
   ok('两次同时标记只完成一次',responses.filter(good).length===1 && responses.some(x=>x.code===409) &&
     !(await call(boss,'GET',path)).data.nextStep)
   const delegated = (await call(boss,'PUT',path+'/next',{content:'确认交付范围',ownerId:bossId})).data
@@ -165,6 +170,7 @@ sql(`update jiedan_order set status='${projectStatus}' where id=${id}`)
   sql(`update jiedan_order set next_owner_id=null where id=${id}`)
   ok('旧下一步缺少指定人时由项目负责人办理',
     (await close(boss,'next',legacy.version)).code===403 && good(await close(ta,'next',legacy.version)))
+  await call(boss,'POST',path+'/task-review',{kind:'next',decision:'confirm',version:(await call(boss,'GET',path)).data.version})
 }
 
 // ---- 下一步 ----
@@ -182,11 +188,11 @@ const portal = await call(client, 'GET', '/jiedan/portal/orders/' + id)
 ok('客户看不到下一步', good(portal) && !('nextStep' in portal.data) && !JSON.stringify(portal.data).includes('出首页设计'))
 const portalList = await call(client, 'GET', '/jiedan/portal/orders')
 ok('客户列表看不到下一步', good(portalList) && !JSON.stringify(portalList.data).includes('出首页设计'))
-r = await call(ta, 'POST', `/jiedan/order/${id}/next/done`, { content: '老板确认首页', ownerId: bossId })
-ok('员工完成并把下一步交给老板', good(r) && r.data.nextStep === '老板确认首页' && r.data.nextOwnerId === bossId && !r.data.nextDue)
-ok('完成记入内部记录', r.data.timeline.some((t) => t.content.includes('完成了下一步：出首页设计')))
-r = await call(boss, 'POST', `/jiedan/order/${id}/next/done`, {})
-ok('完成后不再安排则清空', good(r) && !r.data.nextStep && !r.data.nextOwnerId)
+ok('有交接时不能跳过发起人的确认直接另派',denied(await call(ta,'POST',`/jiedan/order/${id}/next/done`,{content:'老板确认首页',ownerId:bossId})))
+r = await call(ta,'POST',`/jiedan/order/${id}/next/done`,{})
+ok('完成记入交接记录',good(r) && r.data.timeline.some(t=>t.type==='handoff' && t.content.includes('出首页设计')))
+r = await call(boss,'POST',`/jiedan/order/${id}/task-review`,{kind:'next',decision:'confirm',version:r.data.version})
+ok('确认后不再安排则清空',good(r) && !r.data.nextStep && !r.data.nextOwnerId)
 ok('没有下一步时不能完成', denied(await call(boss, 'POST', `/jiedan/order/${id}/next/done`, {})))
 r = await call(boss, 'PUT', `/jiedan/order/${id}/next`, { content: '交付验收', ownerId: a.id })
 ok('不填负责人默认交给项目负责人也可指定', good(r) && r.data.nextOwnerId === a.id)

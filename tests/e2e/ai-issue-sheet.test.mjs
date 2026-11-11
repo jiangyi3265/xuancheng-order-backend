@@ -94,7 +94,7 @@ async function missing(url) {
   assert.equal(r.status,404)
   assert.equal((await r.text()).trim(),'找不到')
 }
-await test('普通记录保留未标记；发送给负责人处理立即进入对应问题队列，可直接完成',async()=>{
+await test('普通记录保留未标记；发送给负责人处理处理后再由发起人验收',async()=>{
   const feedback='同事发来的处理反馈-'+tag
   const created=await api(admin,'POST','/jiedan/order/bug',{orderId:second.id,content:feedback,needsAction:true})
   const task=created.bugs.find(b=>b.content===feedback)
@@ -104,7 +104,9 @@ await test('普通记录保留未标记；发送给负责人处理立即进入�
   assert(assignedList.find(p=>p.id===second.id).actionBugPreviews.some(b=>b.id===task.id))
   assert(!(await api(owner.token,'GET','/jiedan/order/list')).some(p=>p.id===second.id))
   const result=await api(other.token,'PUT','/jiedan/order/bug/'+task.id+'/status',{status:'resolved'})
-  assert.equal(result.bugs.find(b=>b.id===task.id).status,'resolved')
+  assert.equal(result.bugs.find(b=>b.id===task.id).status,'ai_review')
+  const approved=await api(admin,'PUT','/jiedan/order/bug/'+task.id+'/status',{status:'resolved',previousStatus:'ai_review'})
+  assert.equal(approved.bugs.find(b=>b.id===task.id).status,'resolved')
 })
 await test('申请和管理仅限老板或本项目负责人，客户/其他成员/匿名均不得管理',async()=>{
   assert.equal((await state(admin)).state,'none')

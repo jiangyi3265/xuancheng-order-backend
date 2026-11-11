@@ -117,6 +117,7 @@
             o.status as status,
             o.handled as handled,
             <include refid="urgentHandoffJson"/> as urgentHandoff,
+            <include refid="taskTurns"/> as taskTurns,
             date_format(o.urgent_until, '%Y-%m-%d %H:%i') as urgentUntil,
             date_format(o.handled_time, '%Y-%m-%d %H:%i:%s') as handledTime,
             o.priority as priority,
@@ -284,6 +285,28 @@
         for update
     </select>
 
+    <sql id="taskTurns">
+        (select json_objectagg(t.task_key,json_object('requesterId',t.requester_id,'requesterName',u.nick_name,
+          'submittedBy', t.submitted_by, 'submittedAt',date_format(t.submitted_at,'%Y-%m-%d %H:%i:%s')))
+         from jiedan_task_turn t join sys_user u on u.user_id=t.requester_id where t.order_id=o.id)
+    </sql>
+    <select id="selectTaskTurns" resultType="String">
+        select <include refid="taskTurns"/> from jiedan_order o where o.id=#{id}
+    </select>
+    <insert id="assignTaskTurn">insert into jiedan_task_turn(order_id,task_key,requester_id) values(#{id},#{key},#{actor})
+      on duplicate key update requester_id=values(requester_id),submitted_by=null,submitted_at=null</insert>
+    <update id="submitTaskTurn">update jiedan_task_turn set submitted_by=#{actor}, submitted_at=now() where order_id=#{id} and task_key=#{key}</update>
+    <update id="returnTaskTurn">update jiedan_task_turn set submitted_by=null,submitted_at=null where order_id=#{id} and task_key=#{key}</update>
+    <delete id="removeTaskTurn">delete from jiedan_task_turn where order_id=#{id} and task_key=#{key}</delete>
+    <delete id="clearTaskTurns">delete from jiedan_task_turn where order_id=#{id}</delete>
+    <delete id="pruneReassignedTurns">
+      delete t from jiedan_task_turn t where t.order_id=#{id} and
+       (t.requester_id=#{owner} and t.task_key&lt;&gt;'next' or
+        t.requester_id&lt;&gt;#{owner} and not exists(select 1 from sys_user_role ur join sys_role r on r.role_id=ur.role_id where ur.user_id=t.requester_id and r.role_key='admin'))
+    </delete>
+    <update id="reopenReassignedTurns">
+      update jiedan_task_turn set submitted_by=null,submitted_at=null where order_id=#{id} and submitted_by=#{previous} and task_key in ('manual','next')
+    </update>
     <sql id="urgentHandoffJson">
         if(h.order_id is null, null, json_object('requesterId', h.requester_id, 'requesterName', u.nick_name,
            'due', date_format(h.due_at,'%Y-%m-%d %H:%i'), 'submittedBy', h.submitted_by,

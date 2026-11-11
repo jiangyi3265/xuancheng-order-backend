@@ -83,6 +83,7 @@ const customer = 'wc' + tag
 await call(boss,'POST','/jiedan/customer',{userName:customer,nickName:'问题反馈人',password:pw,ownerId:emp.id})
 const customerToken = await login(customer,pw)
 const id = (await call(boss, 'POST', '/jiedan/order', { title: '企微通知-' + tag, channel: 'wechat', ownerId: emp.id, customerAccount:customer })).data.id
+await call(te,'POST','/jiedan/order/'+id+'/accept')
 const project = 'order?id=' + id
 ok('派单打开对应项目', await delivered('ZhangSan', '新单待接', project))
 ok('发起催办', good(await call(boss, 'POST', '/jiedan/order/nudge', { id })))
@@ -118,6 +119,7 @@ ok('附件问题说明和接收人正确', await delivered('LaoBan','新问题 #
 await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'action'})
 ok('交办通知打开同一问题', await delivered('ZhangSan','问题需处理',issue))
 await call(te,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved'})
+await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved',previousStatus:'ai_review'})
 await Promise.all(['open','reopen'].map(status => call(customerToken,'PUT','/jiedan/portal/bug/'+bug+'/status',{status})))
 ok('客户重新激活时，项目负责人和管理人收到同一问题的链接', await delivered('ZhangSan','客户重新激活了问题',issue) && await delivered('LaoBan','客户重新激活了问题',issue))
 const reopenRecipients = issueCards(issue).filter(msg=>msg.news.articles[0].title==='客户重新激活了问题').map(msg=>msg.touser).sort()
@@ -225,7 +227,8 @@ ok('提醒自己的加急也只发给自己且含截止时间',good(await notify
 await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'action'})
 ok('问题提醒包含对应的说明、编号并直达该问题',good(await notify(boss,'bug',{bugId:bug})) &&
   checkCard('ZhangSan',issue,'卡片定位测试') && checkCard('ZhangSan',issue,'#'+bug))
-await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved'})
+await call(te,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved'})
+await call(boss,'PUT','/jiedan/order/bug/'+bug+'/status',{status:'resolved',previousStatus:'ai_review'})
 const afterResolution = await receipts()
 ok('解决问题只清除本问题回执，已提醒的其他待办仍可见',!afterResolution['bug-'+bug] && afterResolution.manual && afterResolution.urgent && afterResolution.next)
 await call(customerToken,'PUT','/jiedan/portal/bug/'+bug+'/status',{status:'reopen'})
