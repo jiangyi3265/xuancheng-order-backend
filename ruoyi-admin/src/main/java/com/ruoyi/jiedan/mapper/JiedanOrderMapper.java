@@ -22,13 +22,14 @@ public interface JiedanOrderMapper
     String selectTaskTurns(Long id);
     void assignTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("actor") Long actor);
     void submitTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("actor") Long actor);
-    void returnTaskTurn(@Param("id") Long id, @Param("key") String key);
+    void returnTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("note") String note);
     void removeTaskTurn(@Param("id") Long id, @Param("key") String key);
     void clearTaskTurns(Long id);
     void pruneReassignedTurns(@Param("id") Long id,@Param("owner") Long owner);
     void reopenReassignedTurns(@Param("id") Long id,@Param("previous") Long previous);
     String selectUrgentHandoff(Long id);
     void saveUrgentHandoff(@Param("id") Long id, @Param("sender") Long sender, @Param("due") String due);
+    void returnUrgentHandoff(@Param("id") Long id, @Param("note") String note);
     void submitUrgentHandoff(@Param("id") Long id, @Param("actor") Long actor);
     void deleteUrgentHandoff(Long id);
 

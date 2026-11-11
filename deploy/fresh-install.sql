@@ -956,6 +956,8 @@ CREATE TABLE IF NOT EXISTS jiedan_urgent_handoff (
   due_at datetime NOT NULL,
   submitted_by bigint DEFAULT NULL,
   submitted_at datetime DEFAULT NULL,
+  returned_at datetime DEFAULT NULL,
+  return_note varchar(300) DEFAULT NULL,
   CONSTRAINT fk_urgent_handoff_order FOREIGN KEY (order_id) REFERENCES jiedan_order(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -1023,6 +1025,8 @@ CREATE TABLE IF NOT EXISTS jiedan_task_turn (
   requester_id bigint NOT NULL,
   submitted_by bigint DEFAULT NULL,
   submitted_at datetime DEFAULT NULL,
+  returned_at datetime DEFAULT NULL,
+  return_note varchar(300) DEFAULT NULL,
   PRIMARY KEY(order_id,task_key),
   FOREIGN KEY (order_id) REFERENCES jiedan_order(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
