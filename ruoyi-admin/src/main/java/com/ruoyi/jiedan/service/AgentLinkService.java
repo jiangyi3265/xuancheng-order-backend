@@ -72,7 +72,7 @@ public class AgentLinkService
                 + " date_format(date_add(expires_at, interval 8 hour), '%Y-%m-%d %H:%i:%s') as expiresAt,"
                 + " date_format(date_add(last_read_at, interval 8 hour), '%Y-%m-%d %H:%i:%s') as lastReadAt"
                 + ", (select left(sha2(k.secret_hash,256),24) from jiedan_agent_reply_key k where k.order_id=l.order_id and k.read_hash=l.token_hash) as replyRevision"
-                + ", k.reader_id as replyReaderId from jiedan_agent_link l left join jiedan_agent_reply_key k on k.order_id=l.order_id where l.order_id=?", id);
+                + " from jiedan_agent_link l where l.order_id=?", id);
         if (!rows.isEmpty()) return new LinkedHashMap<>(rows.get(0));
         Map<String, Object> empty = new LinkedHashMap<>();
         empty.put("state", "none");
@@ -127,34 +127,21 @@ public class AgentLinkService
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String,Object> replyKey(long id, boolean enable, Long reader)
+    public Map<String,Object> replyKey(long id, boolean enable)
     {
         projectForMember(id);
         if (!enable) {
             db.update("update jiedan_agent_reply_key set secret_hash=null where order_id=?", id);
             return Map.of("enabled", false);
         }
-        if (reader != null && !access.isAssignable(reader)) throw new ServiceException("请选择有效的协作成员");
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         String secret = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         int changed = db.update("insert into jiedan_agent_reply_key(order_id,secret_hash,read_hash,reader_id) "
-                + "select order_id,?,token_hash,? from jiedan_agent_link where order_id=? and disabled=0 and expires_at>utc_timestamp() "
-                + "on duplicate key update secret_hash=values(secret_hash),read_hash=values(read_hash),reader_id=values(reader_id)", DigestUtils.sha256Hex(secret), reader, id);
+                + "select order_id,?,token_hash,null from jiedan_agent_link where order_id=? and disabled=0 and expires_at>utc_timestamp() "
+                + "on duplicate key update secret_hash=values(secret_hash),read_hash=values(read_hash),reader_id=values(reader_id)", DigestUtils.sha256Hex(secret), id);
         if (changed == 0) throw new ServiceException("请先生成有效的 AI 只读链接");
         return Map.of("secret", secret, "replyRevision", status(id).get("replyRevision"));
-    }
-
-    @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String,Object> changeReader(long id, Long reader)
-    {
-        projectForMember(id);
-        if (reader != null && !access.isAssignable(reader)) throw new ServiceException("请选择有效的协作成员");
-        Map<String,Object> current = status(id);
-        if (!"active".equals(current.get("state")) || current.get("replyRevision") == null)
-            throw new ServiceException("请先开启回复权限");
-        db.update("update jiedan_agent_reply_key set reader_id=? where order_id=?", reader, id);
-        return status(id);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -199,9 +186,9 @@ public class AgentLinkService
         return db.queryForList("select o.id as orderId,o.owner_id as ownerId,o.title,b.id as bugId,substring_index(substring_index(left(b.content,coalesce(b.sheet_chars,char_length(b.content))),concat(char(10),'联系方式：'),1),concat(char(10),'参考预算：'),1) as issue,b.status,u.content as report,"
                 + "date_format(u.create_time,'%Y-%m-%d %H:%i') as time,u.id from jiedan_bug_reply_meta m "
                 + "join jiedan_bug_update u on u.id=m.update_id join jiedan_bug b on b.id=u.bug_id "
-                + "join jiedan_order o on o.id=b.order_id left join jiedan_agent_reply_key k on k.order_id=o.id "
-                + "where m.sender_kind='codex' and o.del_flag=0 and (? is null or o.owner_id=? or k.reader_id=?) order by u.id desc",
-                scope,scope,scope);
+                + "join jiedan_order o on o.id=b.order_id "
+                + "where m.sender_kind='codex' and o.del_flag=0 and (? is null or o.owner_id=?) order by u.id desc",
+                scope,scope);
     }
 
     private String replyText(Map<String,String> body,String field)

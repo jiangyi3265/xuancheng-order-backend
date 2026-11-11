@@ -44,18 +44,10 @@ public class JiedanAgentLinkController
 
     @PreAuthorize("@ss.hasRole('admin')")
     @PostMapping("/orders/{id}/reply-key/{action:enable|disable}")
-    public AjaxResult replyKey(@PathVariable long id, @PathVariable String action, @RequestParam(required=false) Long readerId, HttpServletResponse response)
+    public AjaxResult replyKey(@PathVariable long id, @PathVariable String action, HttpServletResponse response)
     {
         response.setHeader("Cache-Control","no-store");
-        return AjaxResult.success(links.replyKey(id,"enable".equals(action),readerId));
-    }
-
-    @PreAuthorize("@ss.hasRole('admin')")
-    @PostMapping("/orders/{id}/reply-reader")
-    public AjaxResult changeReader(@PathVariable long id, @RequestParam(required=false) Long readerId, HttpServletResponse response)
-    {
-        response.setHeader("Cache-Control","no-store");
-        return AjaxResult.success(links.changeReader(id,readerId));
+        return AjaxResult.success(links.replyKey(id,"enable".equals(action)));
     }
 
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
