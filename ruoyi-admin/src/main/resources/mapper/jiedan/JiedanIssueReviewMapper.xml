@@ -9,7 +9,7 @@
         where o.id = (select b.order_id from jiedan_bug b where b.id = #{bugId})
           and o.del_flag = 0
         <if test="ownerId != null">and o.owner_id = #{ownerId}</if>
-        <if test="account != null">and o.customer_account = #{account}</if>
+        <if test="account != null">and <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include></if>
         for update
     </select>
     <sql id="fields">

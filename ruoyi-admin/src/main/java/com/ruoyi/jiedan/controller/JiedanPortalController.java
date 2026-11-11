@@ -43,7 +43,7 @@ public class JiedanPortalController extends BaseController
     public AjaxResult myOrder(@PathVariable Long id)
     {
         Map<String, Object> vo = service.getForCustomer(id, SecurityUtils.getUsername());
-        if (vo == null) return AjaxResult.error("项目不存在或无权查看");
+        if (vo == null) return AjaxResult.error(403, "项目不存在或已解除绑定");
         return AjaxResult.success(vo);
     }
 
@@ -51,7 +51,7 @@ public class JiedanPortalController extends BaseController
     public AjaxResult myOrderVersion(@PathVariable Long id)
     {
         Map<String, Object> vo = service.getVersionForCustomer(id, SecurityUtils.getUsername());
-        return vo == null ? AjaxResult.error("项目不存在或无权查看") : AjaxResult.success(vo);
+        return vo == null ? AjaxResult.error(403, "项目不存在或已解除绑定") : AjaxResult.success(vo);
     }
 
     /** 客户确认验收：「待验收」的项目由客户点确认后变成「已完成」 */

@@ -26,6 +26,7 @@ import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
 import com.ruoyi.jiedan.mapper.JiedanCustomerMapper;
+import com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper;
 import com.ruoyi.jiedan.mapper.JiedanIssueReviewMapper;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.jiedan.service.JiedanAccess;
@@ -50,6 +51,9 @@ public class JiedanCustomerController extends BaseController
 
     @Autowired
     private JiedanCustomerMapper customerMapper;
+
+    @Autowired
+    private JiedanProjectTesterMapper testers;
 
     @Autowired
     private JiedanIssueReviewMapper issueReviews;
@@ -112,7 +116,7 @@ public class JiedanCustomerController extends BaseController
         userService.insertUser(user);
         accountMapper.upsertOwner(user.getUserId(), ownerId);
         audit.record("customer.create", "customer", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建客户账号；负责人：" + ownerName(ownerId));
-        return AjaxResult.success("客户账号创建成功");
+        return AjaxResult.success("客户账号创建成功", Map.of("userId", user.getUserId(), "userName", userName));
     }
 
     /** 重置客户账号密码 */
@@ -160,6 +164,7 @@ public class JiedanCustomerController extends BaseController
         if (user == null) return AjaxResult.error("账号不存在");
         if (!isCustomer(userId)) return AjaxResult.error("非客户账号，禁止删除");
         if (!access.canManageCustomer(userId)) return AjaxResult.error("无权操作该客户账号");
+        testers.clearCustomer(user.getUserName(), userId);
         customerMapper.clearBinding(user.getUserName());
         issueReviews.cancelForCustomer(userId);
         accountMapper.deleteOwner(userId);

@@ -9,6 +9,9 @@ public class JiedanBug
 {
     private Long id;
     private Long orderId;
+    private Long customerAuthorId;
+    public Long getCustomerAuthorId() { return customerAuthorId; }
+    public void setCustomerAuthorId(Long value) { customerAuthorId = value; }
     private String content;
     /** 附件（JSON 字符串） */
     private String attachments;

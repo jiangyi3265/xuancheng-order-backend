@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper">
+    <!-- project is a fixed SQL alias supplied by the including mapper. -->
+    <sql id="customerAccess">
+        (${project}.customer_account = #{account} OR EXISTS (
+            SELECT 1 FROM jiedan_project_tester pt JOIN sys_user tu ON tu.user_id=pt.user_id
+            WHERE pt.order_id=${project}.id AND tu.user_name=#{account}
+              AND tu.status='0' AND tu.del_flag='0'
+        ))
+    </sql>
+    <select id="list" resultType="Long">
+        SELECT user_id FROM jiedan_project_tester WHERE order_id=#{orderId} ORDER BY user_id
+    </select>
+    <select id="activeCustomer" resultType="String">
+        SELECT u.user_name FROM sys_user u
+        JOIN sys_user_role ur ON ur.user_id=u.user_id JOIN sys_role r ON r.role_id=ur.role_id
+        WHERE u.user_id=#{userId} AND u.status='0' AND u.del_flag='0' AND r.role_key='customer'
+          AND r.status='0' AND r.del_flag='0' LIMIT 1 FOR UPDATE
+    </select>
+    <delete id="remove">
+        DELETE FROM jiedan_project_tester WHERE order_id=#{orderId} AND user_id=#{userId}
+    </delete>
+    <insert id="add">
+        INSERT INTO jiedan_project_tester(order_id,user_id) VALUES(#{orderId},#{userId})
+    </insert>
+    <delete id="clearCustomer">
+        DELETE pt FROM jiedan_project_tester pt JOIN jiedan_order o ON o.id=pt.order_id
+        WHERE pt.user_id=#{userId} OR o.customer_account=#{account}
+    </delete>
+</mapper>

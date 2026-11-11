@@ -9,6 +9,9 @@ public class JiedanTimeline
 {
     private Long id;
     private Long orderId;
+    private Long customerAuthorId;
+    public Long getCustomerAuthorId() { return customerAuthorId; }
+    public void setCustomerAuthorId(Long value) { customerAuthorId = value; }
     private String userName;
     private String type;
     private String content;

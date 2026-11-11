@@ -4,6 +4,7 @@
 
     <resultMap id="JiedanBugResult" type="com.ruoyi.jiedan.domain.JiedanBug">
         <id     property="id"          column="id"          />
+        <result property="customerAuthorId" column="customer_author_id"/>
         <result property="orderId"     column="order_id"    />
         <result property="content"     column="content"     />
         <result property="attachments" column="attachments" />
@@ -15,7 +16,7 @@
     </resultMap>
 
     <sql id="cols">
-        id, order_id, content, attachments, status, created_by, create_time, sender_kind, sheet_chars
+        id, order_id, content, attachments, status, created_by, create_time, sender_kind, sheet_chars, customer_author_id
     </sql>
 
     <select id="selectByOrderId" parameterType="Long" resultMap="JiedanBugResult">
@@ -41,7 +42,7 @@
               and (notice.update_id is null or (notice.customer_id = #{customerId} and notice.state != 'cancelled'))
         )
         left join jiedan_customer_issue_seen seen on seen.bug_id = b.id and seen.customer_id = #{customerId}
-        where o.customer_account = #{account} and o.del_flag = 0
+        where <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include> and o.del_flag = 0
         order by b.id desc
     </select>
 
@@ -60,8 +61,8 @@
     </select>
 
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanBug" useGeneratedKeys="true" keyProperty="id">
-        insert into jiedan_bug (order_id, content, attachments, status, created_by, create_time, sender_kind, sheet_chars)
-        values (#{orderId}, #{content}, #{attachments}, #{status}, #{createdBy}, #{createTime}, #{senderKind}, #{sheetChars})
+        insert into jiedan_bug (order_id, content, attachments, status, created_by, create_time, sender_kind, sheet_chars, customer_author_id)
+        values (#{orderId}, #{content}, #{attachments}, #{status}, #{createdBy}, #{createTime}, #{senderKind}, #{sheetChars}, #{customerAuthorId})
     </insert>
 
     <update id="updateStatus">

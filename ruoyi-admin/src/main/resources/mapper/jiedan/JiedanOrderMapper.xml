@@ -110,6 +110,7 @@
             o.channel as channel,
             o.customer as customer,
             o.customer_account as customerAccount,
+            (select json_arrayagg(pt.user_id) from jiedan_project_tester pt where pt.order_id=o.id) as testerIds,
             o.contact as contact,
             o.amount as amount,
             o.owner_id as ownerId,
@@ -162,6 +163,7 @@
                 from jiedan_bug b where b.order_id = o.id and b.status = 'action'
             ) end as actionBugPreviews,
             coalesce(mc.message_count, 0) as messageCount,
+            lt.customer_author_id as lastMessageAuthorId,
             lt.user_name as lastMessageUser,
             lt.type as lastMessageType,
             lt.content as lastMessageContent,
@@ -215,8 +217,8 @@
     </select>
 
     <select id="selectByCustomerAccount" parameterType="String" resultMap="JiedanOrderResult">
-        select <include refid="cols"/> from jiedan_order
-        where customer_account = #{customerAccount} and del_flag = 0 order by id desc
+        select <include refid="cols"/> from jiedan_order o
+        where <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include> and del_flag = 0 order by id desc
     </select>
 
     <select id="selectCustomerSummaries" parameterType="String" resultType="java.util.LinkedHashMap">
@@ -241,6 +243,7 @@
             o.update_time as updateTime,
             lt.id as lastMessageId,
             coalesce(mc.message_count, 0) as messageCount,
+            lt.customer_author_id as lastMessageAuthorId,
             lt.user_name as lastMessageUser,
             lt.type as lastMessageType,
             lt.content as lastMessageContent,
@@ -251,12 +254,12 @@
             select t.order_id, count(*) as message_count, max(t.id) as last_id
             from jiedan_timeline t
             join jiedan_order co on co.id = t.order_id
-            where co.customer_account = #{customerAccount}
+            where <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="co"/></include>
               and t.type in ('message', 'reply')
             group by t.order_id
         ) mc on mc.order_id = o.id
         left join jiedan_timeline lt on lt.id = mc.last_id
-        where o.customer_account = #{customerAccount} and o.del_flag = 0
+        where <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include> and o.del_flag = 0
         order by o.id desc
     </select>
 
@@ -271,8 +274,8 @@
     </select>
 
     <select id="selectVersionForCustomer" resultType="Long">
-        select version from jiedan_order
-        where id = #{id} and customer_account = #{customerAccount} and del_flag = 0
+        select version from jiedan_order o
+        where o.id = #{id} and <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include> and del_flag = 0
     </select>
 
     <select id="selectScopedForUpdate" resultMap="JiedanOrderResult">
@@ -451,12 +454,12 @@
         select r.order_id as orderId, r.bug_id as bugId, b.id as visibleBugId, r.payload_hash as payloadHash, o.id as visibleId,
                o.order_no as orderNo, o.title, coalesce(b.create_time, o.create_time) as created
         from jiedan_intake_receipt r
-        left join jiedan_order o on o.id = r.order_id and o.customer_account = #{account} and o.del_flag = 0
+        left join jiedan_order o on o.id = r.order_id and <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include> and o.del_flag = 0
         left join jiedan_bug b on b.id = r.bug_id and b.order_id = o.id
         where r.customer_id = #{customerId} and r.request_key = #{key} for update
     </select>
     <select id="customerProjectIds" resultType="Long">
-        select id from jiedan_order where customer_account = #{account} and del_flag = 0 order by id limit 2
+        select id from jiedan_order o where <include refid="com.ruoyi.jiedan.mapper.JiedanProjectTesterMapper.customerAccess"><property name="project" value="o"/></include> and del_flag = 0 order by id limit 2
     </select>
     <update id="finishIntake">
         update jiedan_intake_receipt set order_id = #{orderId}, bug_id = #{bugId} where customer_id = #{customerId} and request_key = #{key}

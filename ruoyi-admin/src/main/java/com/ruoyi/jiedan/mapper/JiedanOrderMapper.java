@@ -47,16 +47,16 @@ public interface JiedanOrderMapper
 
     int bumpVersion(@Param("id") Long id);
 
-    List<JiedanOrder> selectByCustomerAccount(String customerAccount);
+    List<JiedanOrder> selectByCustomerAccount(@Param("account") String account);
 
-    List<java.util.Map<String, Object>> selectCustomerSummaries(String customerAccount);
+    List<java.util.Map<String, Object>> selectCustomerSummaries(@Param("account") String account);
 
     Long selectVersionById(Long id);
 
     /** 同 selectVersionById，但 ownerId 不为空时要求项目负责人是该账号，否则返回 null */
     Long selectVersionScoped(@Param("id") Long id, @Param("ownerId") Long ownerId);
 
-    Long selectVersionForCustomer(@Param("id") Long id, @Param("customerAccount") String customerAccount);
+    Long selectVersionForCustomer(@Param("id") Long id, @Param("account") String account);
 
     /** 只查未删除的项目；回收站里的项目返回 null */
     JiedanOrder selectById(Long id);

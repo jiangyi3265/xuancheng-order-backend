@@ -4,6 +4,7 @@
 
     <resultMap id="JiedanTimelineResult" type="com.ruoyi.jiedan.domain.JiedanTimeline">
         <id     property="id"          column="id"          />
+        <result property="customerAuthorId" column="customer_author_id"/>
         <result property="orderId"     column="order_id"    />
         <result property="userName"    column="user_name"   />
         <result property="type"        column="type"        />
@@ -13,13 +14,13 @@
     </resultMap>
 
     <select id="selectByOrderId" parameterType="Long" resultMap="JiedanTimelineResult">
-        select id, order_id, user_name, type, content, attachments, create_time
+        select id, order_id, user_name, type, content, attachments, create_time, customer_author_id
         from jiedan_timeline where order_id = #{orderId} order by id asc
     </select>
 
     <insert id="insert" parameterType="com.ruoyi.jiedan.domain.JiedanTimeline" useGeneratedKeys="true" keyProperty="id">
-        insert into jiedan_timeline (order_id, user_name, type, content, attachments, create_time)
-        values (#{orderId}, #{userName}, #{type}, #{content}, #{attachments}, #{createTime})
+        insert into jiedan_timeline (order_id, user_name, type, content, attachments, create_time, customer_author_id)
+        values (#{orderId}, #{userName}, #{type}, #{content}, #{attachments}, #{createTime}, #{customerAuthorId})
     </insert>
 
     <update id="updateAttachments">
