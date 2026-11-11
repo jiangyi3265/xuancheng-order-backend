@@ -373,7 +373,6 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             }
         }
         String customerAccount = asStr(p.get("customerAccount"));
-        access.requireBindableCustomer(customerAccount);
         return insertOrder(p, owner, customerAccount, by, access.currentName(), needAccept);
     }
 
@@ -491,6 +490,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         o.setCreateTime(now);
         o.setUpdateTime(now);
         orderMapper.insert(o);
+        access.claimProjectDraft(o.getId(), p.get("customerDraftKey"));
+        access.requireBindableCustomer(customerAccount, o.getId());
         if (p.containsKey("testerIds")) saveTesters(o.getId(), customerAccount, p.get("testerIds"), List.of());
 
         o.setOrderNo("XC-" + year(now) + "-" + String.format("%04d", o.getId()));
@@ -545,7 +546,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             String username = testers.activeCustomer(id);
             if (username == null) throw new ServiceException("请选择已启用的客户账号");
             if (username.equalsIgnoreCase(primary)) throw new ServiceException("主客户账号已参与此项目");
-            access.requireBindableCustomer(username);
+            access.requireBindableCustomer(username, orderId);
         }
         for (Long id : existing) if (!selected.contains(id)) testers.remove(orderId, id);
         for (Long id : selected) if (!existing.contains(id)) testers.add(orderId, id);
@@ -572,7 +573,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             String account = strOr(asStr(p.get("customerAccount")), "");
             if (!Objects.equals(strOr(account, ""), strOr(cur.getCustomerAccount(), "")))
             {
-                access.requireBindableCustomer(account);
+                access.requireBindableCustomer(account, id);
             }
             o.setCustomerAccount(account);
         }

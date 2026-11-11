@@ -14,7 +14,13 @@ public interface JiedanCustomerMapper
      * 列出客户账号（含负责人、名下项目数、未完成项目数）。
      * ownerId 不为空时只列归属该管理员的客户；没有归属记录的客户视为归 bossId。
      */
-    List<Map<String, Object>> selectCustomerAccounts(@Param("ownerId") Long ownerId, @Param("bossId") Long bossId);
+    List<Map<String, Object>> selectCustomerAccounts(@Param("ownerId") Long ownerId, @Param("bossId") Long bossId,
+            @Param("scopeKey") String scopeKey, @Param("projectId") Long projectId);
+
+    void addScope(@Param("userId") Long userId, @Param("scopeKey") String scopeKey);
+    boolean availableInProject(@Param("account") String account, @Param("scopeKey") String scopeKey, @Param("projectId") Long projectId);
+    int claimDraft(@Param("projectId") Long projectId, @Param("scopeKey") String scopeKey);
+    boolean usedDraft(String scopeKey);
 
     boolean usernameUsed(String username);
     int reserveShortName(String username);

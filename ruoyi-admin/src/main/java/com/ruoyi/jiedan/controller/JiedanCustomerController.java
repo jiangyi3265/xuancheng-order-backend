@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.alibaba.fastjson2.JSON;
@@ -79,12 +80,14 @@ public class JiedanCustomerController extends BaseController
     /** 客户账号列表（含名下项目数 / 未完成数）；下属管理员只看到自己的客户 */
     @GetMapping("/list")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
-    public AjaxResult list()
+    public AjaxResult list(@RequestParam(defaultValue = "false") boolean picker,
+                           @RequestParam(required = false) Long projectId, @RequestParam(required = false) String draftKey)
     {
         Long scope = access.isBoss() ? null : access.currentUserId();
         List<Long> bosses = access.bossUserIds();
         Long bossId = bosses.isEmpty() ? null : bosses.get(0);
-        return AjaxResult.success(customerMapper.selectCustomerAccounts(scope, bossId));
+        String selectedScope = picker || projectId != null || draftKey != null ? access.customerScope(projectId, draftKey) : null;
+        return AjaxResult.success(customerMapper.selectCustomerAccounts(scope, bossId, selectedScope, projectId));
     }
 
     /** 新建客户账号；总管理员可指定负责人，下属管理员只能建在自己名下 */
@@ -110,6 +113,7 @@ public class JiedanCustomerController extends BaseController
             }
         }
 
+        String scope = access.customerScope(body.get("projectId"), body.get("draftKey"));
         if (StringUtils.isEmpty(userName)) userName = allocateShortName();
         else
         {
@@ -118,7 +122,7 @@ public class JiedanCustomerController extends BaseController
             user.setUserName(userName);
             if (!userService.checkUserNameUnique(user)) return AjaxResult.error("账号「" + userName + "」已存在");
         }
-        return AjaxResult.success("客户账号创建成功", createAccount(userName, nickName, password, ownerId, customerRoleId()));
+        return AjaxResult.success("客户账号创建成功", createAccount(userName, nickName, password, ownerId, customerRoleId(), scope));
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -147,7 +151,9 @@ public class JiedanCustomerController extends BaseController
             names.add(nickname);
         }
         long creator = access.currentUserId();
-        String hash = DigestUtils.sha256Hex(JSON.toJSONString(List.of(count, names)));
+        String scope = access.customerScope(body.get("projectId"), body.get("draftKey"));
+        // Preserve retries of pre-upgrade, unscoped batches.
+        String hash = DigestUtils.sha256Hex(JSON.toJSONString("global".equals(scope) ? List.of(count,names) : List.of(count,names,scope)));
         customerMapper.beginBatch(creator, key, hash);
         Map<String,Object> receipt = customerMapper.lockBatch(creator, key);
         if (!hash.equals(receipt.get("hash"))) throw new ServiceException("此批次已使用，请重新创建");
@@ -159,7 +165,7 @@ public class JiedanCustomerController extends BaseController
         for (int i = 0; i < count; i++)
         {
             String username = allocateShortName();
-            accounts.add(createAccount(username, names.isEmpty() ? username : names.get(i), "123456", creator, role));
+            accounts.add(createAccount(username, names.isEmpty() ? username : names.get(i), "123456", creator, role, scope));
         }
         customerMapper.finishBatch(creator, key, JSON.toJSONString(accounts));
         return AjaxResult.success(accounts);
@@ -177,7 +183,7 @@ public class JiedanCustomerController extends BaseController
         }
     }
 
-    private Map<String,Object> createAccount(String userName, String nickName, String password, Long ownerId, Long role)
+    private Map<String,Object> createAccount(String userName, String nickName, String password, Long ownerId, Long role, String scope)
     {
         SysUser user = new SysUser();
         user.setUserName(userName);
@@ -189,6 +195,7 @@ public class JiedanCustomerController extends BaseController
         user.setRoleIds(new Long[] { role });
         userService.insertUser(user);
         accountMapper.upsertOwner(user.getUserId(), ownerId);
+        customerMapper.addScope(user.getUserId(), scope);
         audit.record("customer.create", "customer", user.getUserId(), userName + "（" + user.getNickName() + "）", "创建客户账号；负责人：" + ownerName(ownerId));
         return Map.of("userId", user.getUserId(), "userName", userName, "nickName", user.getNickName());
     }

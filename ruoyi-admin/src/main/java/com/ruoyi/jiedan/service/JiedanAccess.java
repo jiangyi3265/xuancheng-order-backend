@@ -12,6 +12,8 @@ import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.jiedan.domain.JiedanOrder;
 import com.ruoyi.jiedan.mapper.JiedanAccountMapper;
+import com.ruoyi.jiedan.mapper.JiedanCustomerMapper;
+import com.ruoyi.jiedan.mapper.JiedanOrderMapper;
 
 /**
  * 接单系统的数据权限判定：谁能看哪些项目、能管哪些客户。
@@ -27,6 +29,10 @@ public class JiedanAccess
 
     @Autowired
     private JiedanAccountMapper accountMapper;
+    @Autowired
+    private JiedanCustomerMapper customers;
+    @Autowired
+    private JiedanOrderMapper orders;
 
     public Long currentUserId()
     {
@@ -93,10 +99,38 @@ public class JiedanAccess
         return owner != null && owner.equals(currentUserId());
     }
 
-    /** 下属管理员只能把项目绑到自己名下的客户账号。 */
-    public void requireBindableCustomer(String account)
+    public String customerScope(Object projectId, Object draftKey)
     {
-        if (StringUtils.isEmpty(account) || isBoss()) return;
+        if (projectId != null && draftKey != null) throw new ServiceException("请选择一个项目");
+        if (projectId != null)
+        {
+            long id;
+            try { id = Long.parseLong(projectId.toString()); }
+            catch (NumberFormatException e) { throw new ServiceException(DENIED); }
+            if (!canAccess(orders.selectById(id))) throw new ServiceException(DENIED);
+            return "project:" + id;
+        }
+        if (draftKey == null) return "global";
+        String key = draftKey.toString();
+        if (!key.matches("[a-zA-Z0-9_-]{16,64}")) throw new ServiceException("项目草稿标识无效");
+        String scope = "draft:" + currentUserId() + ":" + key;
+        if (customers.usedDraft(scope)) throw new ServiceException("这个草稿已保存为项目，请重新打开该项目");
+        return scope;
+    }
+
+    public void claimProjectDraft(Long projectId, Object draftKey)
+    {
+        if (draftKey != null && customers.claimDraft(projectId, customerScope(null, draftKey)) != 1)
+            throw new ServiceException("这个草稿已保存为项目，请重新打开该项目");
+    }
+
+    /** 下属管理员只能把项目绑到自己名下的客户账号。 */
+    public void requireBindableCustomer(String account, Long projectId)
+    {
+        if (StringUtils.isEmpty(account)) return;
+        if (!customers.availableInProject(account, "project:" + projectId, projectId))
+            throw new ServiceException("该客户账号不属于当前项目，请选择本项目的账号");
+        if (isBoss()) return;
         Long uid = accountMapper.selectUserIdByName(account);
         if (uid == null) throw new ServiceException("客户账号不存在");
         if (!canManageCustomer(uid)) throw new ServiceException("无权绑定该客户账号");
