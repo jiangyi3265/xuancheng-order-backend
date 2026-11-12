@@ -165,7 +165,10 @@
             lt.id as lastMessageId,
             coalesce(bc.action_count, 0) as actionBugCount,
             case when bc.action_count > 0 then (
-                select json_arrayagg(json_object('id', b.id, 'content', left(coalesce(b.content, ''), 120)))
+                select json_arrayagg(json_object('id', b.id, 'content', left(coalesce(b.content, ''), 120),
+                  <!-- 做完后交给客户确认（项目绑了客户账号、问题是客户提的）：按钮叫「已处理」 -->
+                  'customerConfirm', coalesce(o.customer_account,'') &lt;&gt; '' and (b.sender_kind in ('customer','old_intake','old_account') or
+                    ((b.sender_kind is null or b.sender_kind='') and binary b.created_by in (binary o.customer,binary o.customer_account)))))
                 from jiedan_bug b where b.order_id = o.id and b.status = 'action'
             ) end as actionBugPreviews,
             coalesce(mc.message_count, 0) as messageCount,

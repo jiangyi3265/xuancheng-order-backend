@@ -95,6 +95,12 @@ public interface IJiedanOrderService
 
     Map<String, Object> requestIssueReview(Long bugId, Map<String, Object> payload);
 
+    /** AI 改完一条客户提的问题：以项目负责人的名义记成「已处理」请客户确认；不适用时返回 false。 */
+    boolean finishIssueForCustomer(Long orderId, Long bugId, String note);
+
+    /** 项目负责人的名字（AI 回报以负责人的名义显示）。 */
+    String projectOwnerName(Long orderId);
+
     Map<String, Object> decideIssueReview(Long bugId, Long reviewId, Map<String, Object> payload, String account);
 
     Map<String, Object> createBugForCustomer(Map<String, Object> payload, String account, String customerName);

@@ -27,7 +27,7 @@
         select b.order_id as orderId, b.id, left(substring_index(b.content, char(10), 1), 160) as title,
                b.status, date_format(b.create_time, '%Y-%m-%d %H:%i') as submittedAt, b.attachments as rawAttachments,
                r.update_id as reviewId, date_format(invite.create_time, '%Y-%m-%d %H:%i') as reviewTime,
-               u.id as replyId, left(u.content, 180) as replyContent,
+               u.id as replyId, left(u.content, 180) as replyContent, u.created_by as replyBy,
                date_format(u.create_time, '%Y-%m-%d %H:%i') as replyTime,
                case when u.attachments is null or trim(u.attachments) in ('', 'null', '[]') then 0 else 1 end as replyFiles,
                coalesce(seen.update_id, 0) as seenId

@@ -210,7 +210,7 @@ fi
 
 export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER" E2E_WECOM_PORT="${E2E_WECOM_PORT:-18199}"
 RC=0
-for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session customer-issue-replies customer-issue-confirm ai-issue-sheet handoff-notes; do
+for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session customer-issue-replies customer-issue-confirm ai-issue-sheet handoff-notes customer-done-confirm; do
   echo
   echo "################ $t.test.mjs ################"
   node "$HERE/$t.test.mjs" || RC=1

@@ -33,10 +33,13 @@ public class AgentLinkService
     private final JiedanAttachmentStorage media;
     private final JiedanAccess access;
     private final JiedanAuditService audit;
+    private final IJiedanOrderService orders;
 
     public AgentLinkService(JdbcTemplate db, JiedanBugMapper bugs, JiedanBugUpdateMapper updates,
-                            JiedanSettingMapper settings, JiedanAttachmentStorage media, JiedanAccess access, JiedanAuditService audit)
+                            JiedanSettingMapper settings, JiedanAttachmentStorage media, JiedanAccess access, JiedanAuditService audit,
+                            @org.springframework.context.annotation.Lazy IJiedanOrderService orders)
     {
+        this.orders = orders;
         this.db = db;
         this.bugs = bugs;
         this.updates = updates;
@@ -171,12 +174,15 @@ public class AgentLinkService
         if (List.of("done","cancelled").contains(project.get(0)) ||
             !(issue.getStatus()==null || issue.getStatus().isEmpty() || List.of("open","action").contains(issue.getStatus())))
             throw new ServiceException("当前需求不接受新的修改回报",409);
+        // 完整回报（含测试结果）只给团队看，署名是项目负责人，不再显示「Codex」
         JiedanBugUpdate row = new JiedanBugUpdate();
-        row.setBugId(bug); row.setCreatedBy("Codex"); row.setCreateTime(new java.util.Date());
+        row.setBugId(bug); row.setCreatedBy(orders.projectOwnerName(id)); row.setCreateTime(new java.util.Date());
         row.setContent("修改内容："+change+"\n测试结果："+tests);
         updates.insert(row);
         updates.insertMeta(row.getId(),bug,"codex",0L,request,hash);
-        bugs.updateStatus(bug,"ai_review");
+        // 客户提的问题：改完就是「已处理」，以负责人的名义把修改内容发给客户确认，客户确认后才是已解决；
+        // 团队自己记的问题、没绑客户账号的项目，仍然先交给内部验收
+        if (!orders.finishIssueForCustomer(id, bug, change)) bugs.updateStatus(bug,"ai_review");
         db.update("update jiedan_order set version=version+1,update_time=now() where id=?",id);
     }
 

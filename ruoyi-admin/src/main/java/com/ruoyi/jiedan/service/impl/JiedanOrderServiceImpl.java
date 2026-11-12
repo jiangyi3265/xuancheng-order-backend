@@ -271,6 +271,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         reply.put("id", replyId);
         reply.put("content", Objects.toString(item.remove("replyContent"), ""));
         reply.put("time", item.remove("replyTime"));
+        // 谁回的：显示团队成员的名字（AI 改完的回报署名是项目负责人）
+        reply.put("by", displayMemberName(Objects.toString(item.remove("replyBy"), "")));
         reply.put("hasAttachments", asLong(item.remove("replyFiles")) != 0L);
         long seenId = asLong(item.remove("seenId"));
         reply.put("unread", replyId != null && replyId > seenId);
@@ -941,9 +943,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             } else if (!"action".equals(bug.getStatus()) && (turn == null || !actor.equals(o.getOwnerId()))) assignTaskTurn(o.getId(),key,o.getOwnerId());
         } else {
             if ("ai_review".equals(bug.getStatus()) && "resolved".equals(status)) approvalReceipt(o,key,turn,access.currentName());
+            // 客户提的问题：团队做完只算「已处理」，发给客户确认，客户点了才算已解决。
+            // 同事交上来的说明（通过时）一起带给客户。
+            String submitted = "ai_review".equals(bug.getStatus()) && turn != null ? asStr(turn.get("submitNote")) : null;
             orderMapper.removeTaskTurn(o.getId(),key);
+            if ("resolved".equals(status) && sendToCustomer(o, bug, submitted, actor, access.currentName())) status = "confirm";
         }
-        bugMapper.updateStatus(bugId, status);
+        if (!"confirm".equals(status)) bugMapper.updateStatus(bugId, status);
 
         Long by = access.currentUserId();
         String byName = access.currentName();
@@ -1094,6 +1100,70 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return "done".equals(status) || "cancelled".equals(status);
     }
 
+    /** 客户自己提的问题（含老版本客户提交的）。团队记的问题不需要客户确认。 */
+    private boolean customerRaised(JiedanOrder o, JiedanBug b)
+    {
+        String kind = b.getSenderKind();
+        if (List.of("customer","old_intake","old_account").contains(strOr(kind, ""))) return true;
+        return StringUtils.isEmpty(kind) && StringUtils.isNotEmpty(b.getCreatedBy())
+                && (b.getCreatedBy().equals(o.getCustomer()) || b.getCreatedBy().equals(o.getCustomerAccount()));
+    }
+
+    /** 这条问题做完后要不要交给客户确认（项目绑了客户账号、问题是客户提的）。 */
+    private boolean customerConfirms(JiedanOrder o, JiedanBug b)
+    {
+        return StringUtils.isNotEmpty(o.getCustomerAccount()) && customerRaised(o, b);
+    }
+
+    /**
+     * 团队做完一条客户提的问题：不直接改成已解决，而是记成「已处理」并请客户确认（和「请客户确认」同一套记录），
+     * 客户点「确认已解决」后才是已解决。项目已结束、没绑客户账号、账号已失效时返回 false，由调用方按原来的方式处理。
+     */
+    private boolean sendToCustomer(JiedanOrder o, JiedanBug bug, String note, Long senderId, String senderName)
+    {
+        if (closedStatus(o.getStatus()) || !customerConfirms(o, bug) || "confirm".equals(bug.getStatus())) return false;
+        Long customerId = accountMapper.selectUserIdByName(o.getCustomerAccount());
+        if (customerId == null) return false;
+        String text = strOr(note, "").trim();
+        Date now = new Date();
+        JiedanBugUpdate invitation = insertBugUpdate(bug.getId(), senderName, text.isEmpty() ? "请确认这次修改" : "请确认修改：" + text,
+                java.util.Collections.emptyList(), now);
+        bugUpdateMapper.insertMeta(invitation.getId(), bug.getId(), "team", senderId, null, null);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", invitation.getId());
+        row.put("bugId", bug.getId());
+        row.put("customerId", customerId);
+        row.put("senderId", senderId);
+        row.put("key", "done-" + invitation.getId());
+        row.put("hash", reviewHash(Arrays.asList(invitation.getId(), text)));
+        row.put("priorStatus", strOr(bug.getStatus(), "open"));
+        row.put("beforeImage", jsonStr(beforeImage(bug, "")));
+        row.put("afterImage", null);
+        row.put("content", text);
+        issueReviews.insert(row);
+        bugMapper.updateStatus(bug.getId(), "confirm");
+        clearBugReceipt(bug);
+        touchOrder(o.getId(), now);
+        return true;
+    }
+
+    @Override
+    public boolean finishIssueForCustomer(Long orderId, Long bugId, String note)
+    {
+        JiedanOrder o = orderMapper.selectById(orderId);
+        JiedanBug bug = bugMapper.selectById(bugId);
+        if (o == null || bug == null || o.getOwnerId() == null) return false;
+        // AI 改完的回报以项目负责人的名义发给客户（客户看到的是负责人，不是 Codex）
+        return sendToCustomer(o, bug, note, o.getOwnerId(), ownerName(o.getOwnerId()));
+    }
+
+    @Override
+    public String projectOwnerName(Long orderId)
+    {
+        JiedanOrder o = orderMapper.selectById(orderId);
+        return o == null || o.getOwnerId() == null ? "项目负责人" : ownerName(o.getOwnerId());
+    }
+
     private void requireNoPendingReview(JiedanBug bug)
     {
         if ("confirm".equals(bug.getStatus()))
@@ -1172,7 +1242,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         String note = Objects.toString(p.get("content"), "").trim();
         String url = Objects.toString(p.get("beforeUrl"), "").trim();
         Map<String, Object> after = afterImage(p.get("afterImage"));
-        if (note.isEmpty() && after == null) throw new ServiceException("请填写修改说明或上传修改后截图");
+        // 说明和截图都可以不填：客户看到「请确认这次修改」，对照原问题确认
         if (note.length() > 12000) throw new ServiceException("修改说明过长，请分段说明");
         Long previousId = asLong(p.get("previousReviewId"));
         Long me = access.currentUserId();
@@ -2880,6 +2950,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             }
             bm.put("createdBy", displayMemberName(b.getCreatedBy()));
             if (includeInternal) IssueSheet.describe(bm, b, o.getCustomer(), o.getCustomerAccount());
+            // 做完后交给客户确认（按钮叫「已处理」），还是团队直接关掉（「已解决」）
+            if (includeInternal) bm.put("customerConfirm", customerConfirms(o, b));
             bm.put("time", IssueSheet.time(b.getCreateTime()));
 
             List<Map<String, Object>> updates = new ArrayList<>();
@@ -2913,7 +2985,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 if (!"action".equals(bug.get("status"))) continue;
                 String text = Objects.toString(bug.get("content"), "");
                 int length = Math.min(120, text.codePointCount(0, text.length()));
-                previews.add(Map.of("id", bug.get("id"), "content", text.substring(0, text.offsetByCodePoints(0, length))));
+                previews.add(Map.of("id", bug.get("id"), "content", text.substring(0, text.offsetByCodePoints(0, length)),
+                        "customerConfirm", Boolean.TRUE.equals(bug.get("customerConfirm"))));
             }
             int newCount = 0;
             int openCount = 0;
@@ -3124,7 +3197,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     private String bugStatusLabel(String status)
     {
-        return "resolved".equals(status) ? "已解决" : "未解决";
+        return "resolved".equals(status) ? "已解决" : "confirm".equals(status) ? "已处理，等客户确认" : "未解决";
     }
 
     private String dash(String s)
