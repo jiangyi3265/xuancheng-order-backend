@@ -259,6 +259,19 @@ try {
 ok('晚到的旧回执不会覆盖改派后的提醒',good(await late) && (await receipts()).next.by !== firstReceipt.by)
 await call(boss,'PUT',pendingPath+'/urgency',{urgentUntil:'2028-03-01 17:00',previousUntil:deadline})
 ok('变更加急截止时间后该项重新待提醒，其他记录保留',!(await receipts()).urgent && !!(await receipts()).manual)
+// 提交后，同一条提醒必须切换为发给确认人，并独立记录这一次的回执。
+ok('负责人提交下一步后，处理阶段的已提醒回执立即清空',
+  good(await call(te,'POST',pendingPath+'/pending-completion',{kind:'next',version:await getVersion(),note:'新稿可看'})) &&
+  !(await listReceipts(te)).next)
+ok('只有提交人能催验收，卡片发给真正的验收人并打开原项目',
+  denied(await notify(boss,'nextReview')) && good(await notify(te,'nextReview')) &&
+  checkCard('LaoBan',project,'请确认已提交的下一步'))
+const confirmationReceipt = (await listReceipts(te)).next
+ok('催验收回执返回当前阶段接收人的 ID 和发送人的姓名',
+  confirmationReceipt?.recipientId === bossId && confirmationReceipt?.by === '企微员工')
+ok('撤回后催验收不可再发、之前的回执清空',
+  good(await call(te,'PUT',pendingPath+'/handoff-withdraw',{kind:'next',version:await getVersion()})) &&
+  denied(await notify(te,'nextReview')) && !(await listReceipts(te)).next)
 ok('令牌被缓存（只取了一次）', tokenCalls === 1, 'tokenCalls=' + tokenCalls)
 
 // ---- 错误提示 ----

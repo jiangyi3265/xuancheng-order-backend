@@ -67,9 +67,14 @@
     </select>
 
     <sql id="receiptJson">
-        select json_objectagg(r.task_key, json_object('by', t.user_name, 'at', date_format(r.sent_at, '%Y-%m-%d %H:%i:%s')))
+        select json_objectagg(r.task_key, json_object('by', t.user_name, 'at', date_format(r.sent_at, '%Y-%m-%d %H:%i:%s'), 'recipientId',r.recipient_id))
         from jiedan_pending_receipt r join jiedan_timeline t on t.id = r.sent_entry
-        where r.order_id = o.id and r.recipient_id = if(r.task_key = 'next', coalesce(o.next_owner_id,o.owner_id), o.owner_id)
+        left join jiedan_task_turn turn on turn.order_id=r.order_id and turn.task_key=r.task_key
+        left join jiedan_urgent_handoff uh on uh.order_id=r.order_id and r.task_key='urgent'
+        where r.order_id = o.id and r.recipient_id = case
+          when r.task_key='urgent' and uh.submitted_at is not null then uh.requester_id
+          when turn.submitted_at is not null then turn.requester_id
+          when r.task_key='next' then coalesce(o.next_owner_id,o.owner_id) else o.owner_id end
     </sql>
 
     <select id="selectReceipts" resultType="String">
@@ -199,7 +204,7 @@
         <!-- 最近一条动态（任意类型）：消息中心直接写出「谁做了什么」 -->
         left join (
             select order_id, max(id) as last_id
-            from jiedan_timeline
+            from jiedan_timeline where type not in ('handoff.start','handoff.return','handoff.pass')
             group by order_id
         ) ec on ec.order_id = o.id
         left join jiedan_timeline le on le.id = ec.last_id
@@ -285,38 +290,65 @@
         for update
     </select>
 
+    <!-- Only actual returns increment the submission round. A new assignment resets it. -->
+    <sql id="submissionCount">
+      case when ${returned} is null then 1 else 1 + greatest(1,(
+        select count(*) from jiedan_timeline r where r.order_id=o.id
+          and r.content=${turnKey} and r.type='handoff.return' and r.id &gt; coalesce((
+            select max(b.id) from jiedan_timeline b where b.order_id=o.id
+              and b.content=${turnKey} and b.type='handoff.start'),0))) end
+    </sql>
+    <select id="projectCreator" resultType="long">
+      select actor_id from jiedan_audit_log where target_type='order' and target_id=#{id} and action='order.create' order by id limit 1
+    </select>
+    <select id="recentApprovals" resultType="map">
+      select t.id,t.user_name as actorName,t.content as detail,date_format(t.create_time,'%Y-%m-%d %H:%i:%s') as time
+      from jiedan_order o join jiedan_timeline t on t.order_id=o.id and t.type='handoff.pass'
+      where o.del_flag=0 and json_extract(if(json_valid(t.content),t.content,'{}'),'$.submitterId')=#{recipient}
+      <if test="ownerId != null">and o.owner_id=#{ownerId}</if>
+      order by t.id desc limit 100
+    </select>
     <sql id="taskTurns">
         (select json_objectagg(t.task_key,json_object('requesterId',t.requester_id,'requesterName',u.nick_name,
-          'returnedAt', date_format(t.returned_at,'%Y-%m-%d %H:%i:%s'), 'returnNote', t.return_note,
+          'returnedAt', date_format(t.returned_at,'%Y-%m-%d %H:%i:%s'), 'returnNote', t.return_note, 'submitNote', t.submit_note,
+          'submissionCount',<include refid="submissionCount"><property name="returned" value="t.returned_at"/><property name="turnKey" value="t.task_key"/></include>,
           'submittedBy', t.submitted_by, 'submittedName', submitter.nick_name, 'submittedAt',date_format(t.submitted_at,'%Y-%m-%d %H:%i:%s')))
          from jiedan_task_turn t join sys_user u on u.user_id=t.requester_id
-         left join sys_user submitter on submitter.user_id=t.submitted_by where t.order_id=o.id)
+         left join sys_user submitter on submitter.user_id=t.submitted_by where t.order_id=o.id and t.task_key &lt;&gt; 'urgent')
     </sql>
     <select id="selectTaskTurns" resultType="String">
         select <include refid="taskTurns"/> from jiedan_order o where o.id=#{id}
     </select>
     <insert id="assignTaskTurn">insert into jiedan_task_turn(order_id,task_key,requester_id) values(#{id},#{key},#{actor})
-      on duplicate key update requester_id=values(requester_id),submitted_by=null,submitted_at=null,returned_at=null,return_note=null</insert>
-    <update id="submitTaskTurn">update jiedan_task_turn set submitted_by=#{actor}, submitted_at=now() where order_id=#{id} and task_key=#{key}</update>
-    <update id="returnTaskTurn">update jiedan_task_turn set returned_at=now(),return_note=#{note},submitted_by=null,submitted_at=null where order_id=#{id} and task_key=#{key}</update>
+      on duplicate key update requester_id=values(requester_id),submitted_by=null,submitted_at=null,returned_at=null,return_note=null,submit_note=null</insert>
+    <!-- 只保证这条交接存在、确认人是谁；不动它已有的提交 / 退回记录（项目验收用） -->
+    <insert id="ensureTaskTurn">insert into jiedan_task_turn(order_id,task_key,requester_id) values(#{id},#{key},#{requester})
+      on duplicate key update requester_id=values(requester_id)</insert>
+    <update id="submitTaskTurn">update jiedan_task_turn set submitted_by=#{actor}, submitted_at=now(), submit_note=#{note} where order_id=#{id} and task_key=#{key}</update>
+    <update id="returnTaskTurn">update jiedan_task_turn set returned_at=now(),return_note=#{note},submitted_by=null,submitted_at=null,submit_note=null where order_id=#{id} and task_key=#{key}</update>
+    <update id="withdrawTaskTurn">update jiedan_task_turn set submitted_at=null,submitted_by=null,submit_note=null
+      where order_id=#{id} and task_key=#{key}</update>
+    <update id="withdrawUrgentTurn">update jiedan_urgent_handoff set submitted_at=null,submitted_by=null where order_id=#{id}</update>
     <delete id="removeTaskTurn">delete from jiedan_task_turn where order_id=#{id} and task_key=#{key}</delete>
-    <delete id="clearTaskTurns">delete from jiedan_task_turn where order_id=#{id}</delete>
+    <delete id="clearTaskTurns">delete from jiedan_task_turn where order_id=#{id} and task_key &lt;&gt; 'urgent'</delete>
     <delete id="pruneReassignedTurns">
       delete t from jiedan_task_turn t where t.order_id=#{id} and
        (t.requester_id=#{owner} and t.task_key&lt;&gt;'next' or
         t.requester_id&lt;&gt;#{owner} and not exists(select 1 from sys_user_role ur join sys_role r on r.role_id=ur.role_id where ur.user_id=t.requester_id and r.role_key='admin'))
     </delete>
     <update id="reopenReassignedTurns">
-      update jiedan_task_turn set submitted_by=null,submitted_at=null where order_id=#{id} and submitted_by=#{previous} and task_key in ('manual','next')
+      update jiedan_task_turn set submitted_by=null,submitted_at=null,submit_note=null where order_id=#{id} and submitted_by=#{previous} and task_key in ('manual','next')
     </update>
     <sql id="urgentHandoffJson">
         if(h.order_id is null, null, json_object('requesterId', h.requester_id, 'requesterName', u.nick_name,
-           'returnedAt', date_format(h.returned_at,'%Y-%m-%d %H:%i:%s'), 'returnNote', h.return_note,
+           'returnedAt', date_format(h.returned_at,'%Y-%m-%d %H:%i:%s'), 'returnNote', h.return_note, 'submitNote', ut.submit_note,
+           'submissionCount',<include refid="submissionCount"><property name="returned" value="h.returned_at"/><property name="turnKey" value="'urgent'"/></include>,
            'due', date_format(h.due_at,'%Y-%m-%d %H:%i'), 'submittedBy', h.submitted_by,
            'submittedAt', date_format(h.submitted_at,'%Y-%m-%d %H:%i:%s'), 'submittedName', s.nick_name))
     </sql>
     <sql id="urgentHandoffJoins">
         left join jiedan_urgent_handoff h on h.order_id=o.id
+        left join jiedan_task_turn ut on ut.order_id=h.order_id and ut.task_key='urgent'
         left join sys_user u on u.user_id=h.requester_id
         left join sys_user s on s.user_id=h.submitted_by
     </sql>

@@ -142,6 +142,8 @@ if [ -n "${E2E_OLD_SCHEMA_SQL:-}" ]; then
     mysql_db "$DB" < "$ROOT/deploy/upgrade_project_testers.sql" || die "项目测试账号升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_customer_scope.sql" || die "项目账号范围升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_task_turn.sql" || die "待办交接升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_handoff_return.sql" || die "交接退回升级失败"
+    mysql_db "$DB" < "$ROOT/deploy/upgrade_handoff_notes.sql" || die "交接说明升级失败"
     mysql_db "$DB" < "$ROOT/deploy/upgrade_codex_reply.sql" || die "回复权限升级失败"
   done
   echo "   升级脚本各执行两遍（含幂等性）：成功"
@@ -208,7 +210,7 @@ fi
 
 export E2E_BASE="http://127.0.0.1:$PORT" E2E_DB="$DB" E2E_MYSQL="$(winpath "$MYSQL_BIN")" E2E_MYSQL_USER="$MYSQL_USER" E2E_WECOM_PORT="${E2E_WECOM_PORT:-18199}"
 RC=0
-for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session customer-issue-replies customer-issue-confirm ai-issue-sheet; do
+for t in permission hardening solo flow digest customer-session quote collab wecom webpush wechat-session customer-issue-replies customer-issue-confirm ai-issue-sheet handoff-notes; do
   echo
   echo "################ $t.test.mjs ################"
   node "$HERE/$t.test.mjs" || RC=1

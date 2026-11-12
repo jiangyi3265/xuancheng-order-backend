@@ -19,9 +19,14 @@ public interface JiedanOrderMapper
 
     int updateUrgentUntil(@Param("id") Long id, @Param("urgentUntil") String urgentUntil);
 
+    List<Map<String,Object>> recentApprovals(@Param("recipient") Long recipient,@Param("ownerId") Long ownerId);
+    void withdrawTaskTurn(@Param("id") Long id,@Param("key") String key);
+    void withdrawUrgentTurn(Long id);
+    Long projectCreator(Long id);
     String selectTaskTurns(Long id);
     void assignTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("actor") Long actor);
-    void submitTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("actor") Long actor);
+    void submitTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("actor") Long actor, @Param("note") String note);
+    void ensureTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("requester") Long requester);
     void returnTaskTurn(@Param("id") Long id, @Param("key") String key, @Param("note") String note);
     void removeTaskTurn(@Param("id") Long id, @Param("key") String key);
     void clearTaskTurns(Long id);

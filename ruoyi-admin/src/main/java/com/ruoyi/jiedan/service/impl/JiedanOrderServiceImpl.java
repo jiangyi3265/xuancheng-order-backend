@@ -132,9 +132,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         List<Map<String, Object>> list = new ArrayList<>();
         Map<Long, String> names = new LinkedHashMap<>();
+        Map<Long,List<Map<String,Object>>> approvals = recentHandoffApprovals();
         for (Map<String, Object> row : orderMapper.selectAdminSummaries(access.ownerScope(), access.currentUserId()))
         {
             Map<String, Object> vo = toAdminListSummaryVO(row);
+            vo.put("recentApprovalEvents", approvals.getOrDefault(asLong(row.get("id")), List.of()));
             Long nextOwner = asLong(row.get("nextOwnerId"));
             // 员工的成员列表里只有自己：下一步交给老板时，名字由这里带过去
             if (nextOwner != null) vo.put("nextOwnerName", names.computeIfAbsent(nextOwner, this::ownerName));
@@ -341,6 +343,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUpdateTime(now);
         orderMapper.update(upd);
 
+        approvalReceipt(o,"delivery",taskTurn(orderId,"delivery"),name);
         issueReviews.cancelForProject(orderId);
         endUrgentHandoff(orderId);
         addTimeline(orderId, name, "status", "确认验收，项目已完成", null, now);
@@ -640,6 +643,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             changes.add("更新客户绑定");
         }
         orderMapper.update(o);
+        updateDelivery(cur,newOwner,o.getStatus(),p);
         if ((o.getCustomerAccount() != null && !Objects.equals(o.getCustomerAccount(), cur.getCustomerAccount()))
                 || closedStatus(o.getStatus())) issueReviews.cancelForProject(id);
 
@@ -887,6 +891,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 || !Objects.equals(p.get("submittedAt"), turn.get("submittedAt"))
                 || !Objects.equals(p.get("returnedAt"), turn.get("returnedAt"))))
             throw new ServiceException("这条问题有新的处理结果，请刷新后验收",409);
+        if (p != null && p.containsKey("version") && !Objects.equals(o.getVersion(),asLong(p.get("version"))))
+            throw new ServiceException("项目已变化，请刷新后再操作",409);
         String requested = p == null ? null : asStr(p.get("status"));
         if (p != null && p.get("previousStatus") != null && !Objects.equals(bug.getStatus(),p.get("previousStatus")))
             throw new ServiceException("问题状态已变化，请刷新后再操作",409);
@@ -897,7 +903,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (turn != null && ("action".equals(bug.getStatus()) || "open".equals(bug.getStatus()) && "submitReview".equals(requested))
                 && ("resolved".equals(requested) || "submitReview".equals(requested))) {
             if (closedStatus(o.getStatus()) || "pending".equals(o.getAssignState())) throw new ServiceException("请先接收或重新开启项目",409);
-            submitTaskTurn(o,key,o.getOwnerId(),turn,"问题 #"+bugId,NoticeTarget.bug(o.getId(),bugId));
+            submitTaskTurn(o,key,o.getOwnerId(),turn,"问题 #"+bugId,NoticeTarget.bug(o.getId(),bugId),handoffSubmitNote(p));
             bugMapper.updateStatus(bugId,"ai_review");
             return voOf(o.getId());
         }
@@ -912,15 +918,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             if (closedStatus(o.getStatus()) || "pending".equals(o.getAssignState())
                     || !List.of("action","open").contains(strOr(bug.getStatus(), "open")))
                 throw new ServiceException("这条问题当前不能提交验收", 409);
-            // Use the same internal acceptance state/results as an agent reply. Authorship stays in the timeline.
+            Long reviewer = projectReviewer(o.getId(),null);
+            if (reviewer == null) throw new ServiceException("请先设置可验收项目的账号");
+            orderMapper.ensureTaskTurn(o.getId(),key,reviewer);
+            recordTurnChange(o.getId(),key,"handoff.start");
+            submitTaskTurn(o,key,o.getOwnerId(),taskTurn(o.getId(),key),"问题 #"+bugId, NoticeTarget.bug(o.getId(),bugId),handoffSubmitNote(p));
             bugMapper.updateStatus(bugId, "ai_review");
             clearBugReceipt(bug);
-            Date now = new Date();
-            touchUnread(o, by, now);
-            String text = access.currentName() + " 提交了问题 #" + bugId + "，等待内部验收";
-            addTimeline(o.getId(), access.currentName(), "handoff", text, null, now);
-            for (Long reviewer : access.bossUserIds())
-                pushService.pushToTarget(reviewer, "问题等你验收 · " + o.getTitle(), text, NoticeTarget.bug(o.getId(), bugId));
             return voOf(o.getId());
         }
         boolean needsAction = p != null && "action".equals(p.get("status"));
@@ -932,10 +936,13 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if ("action".equals(status)) {
             if (returning) {
                 if (turn == null) assignTaskTurn(o.getId(),key,o.getOwnerId());
-                orderMapper.returnTaskTurn(o.getId(),key,note);
+                returnTurn(o.getId(),key,note);
                 addTimeline(o.getId(), access.currentName(), "handoff", "退回问题 #"+bugId+(note.isEmpty() ? "" : " · "+note), null, new Date());
             } else if (!"action".equals(bug.getStatus()) && (turn == null || !actor.equals(o.getOwnerId()))) assignTaskTurn(o.getId(),key,o.getOwnerId());
-        } else orderMapper.removeTaskTurn(o.getId(),key);
+        } else {
+            if ("ai_review".equals(bug.getStatus()) && "resolved".equals(status)) approvalReceipt(o,key,turn,access.currentName());
+            orderMapper.removeTaskTurn(o.getId(),key);
+        }
         bugMapper.updateStatus(bugId, status);
 
         Long by = access.currentUserId();
@@ -1285,6 +1292,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         String type = strOr(asStr(p.get("type")), "note");
+        String normalized = type.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized.startsWith("handoff.") || "delivery".equals(normalized))
+            throw new ServiceException("交接记录由对应事项生成");
         String content = asStr(p.get("content"));
         // 内部记录可以 @ 同事：只能 @ 这个项目的负责人或总管理员（别人本来就看不到这个项目）
         List<Long> mentioned = new ArrayList<>();
@@ -1369,7 +1379,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         if (turn != null) {
             if (p != null && !Objects.toString(p.get("content"),"").trim().isEmpty())
                 throw new ServiceException("请先提交这一步，发起人确认后可继续安排下一步",409);
-            submitTaskTurn(o,"next",pendingRecipient(o,"next"),turn,"下一步「"+o.getNextStep()+"」",NoticeTarget.order(id));
+            submitTaskTurn(o,"next",pendingRecipient(o,"next"),turn,"下一步「"+o.getNextStep()+"」",NoticeTarget.order(id),handoffSubmitNote(p));
             return voOf(id);
         }
         String done = o.getNextStep();
@@ -1462,6 +1472,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long by = access.currentUserId();
         String byName = access.currentName();
         String status = checkStatus(asStr(p.get("status")));
+        if (p.containsKey("version") && !Objects.equals(o.getVersion(),asLong(p.get("version")))) throw new ServiceException("项目已变化，请刷新后再操作",409);
         if (!access.isBoss()) staffStatusGate(o, status);
         Date now = new Date();
 
@@ -1470,10 +1481,11 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setStatus(status);
         upd.setUpdateTime(now);
         orderMapper.update(upd);
+        updateDelivery(o, o.getOwnerId(), status, p);
         if ("review".equals(status) && !"review".equals(o.getStatus()) && o.getUrgentUntil() != null
                 && by.equals(o.getOwnerId())) {
             Map<String, Object> handoff = urgentHandoff(o.getId());
-            if (handoff != null && !by.equals(asLong(handoff.get("requesterId")))) submitUrgency(o, handoff);
+            if (handoff != null && !by.equals(asLong(handoff.get("requesterId")))) submitUrgency(o, handoff, null);
         }
         if (closedStatus(status)) {
             issueReviews.cancelForProject(o.getId());
@@ -1506,7 +1518,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             throw new ServiceException("项目已更新，请刷新后重新标记", 409);
         Map<String,Object> turn = taskTurn(id,"manual");
         if (Boolean.TRUE.equals(mark) && turn != null && !closedStatus(current.getStatus())) {
-            submitTaskTurn(current,"manual",current.getOwnerId(),turn,"项目处理结果",NoticeTarget.handling(id));
+            submitTaskTurn(current,"manual",current.getOwnerId(),turn,"项目处理结果",NoticeTarget.handling(id),handoffSubmitNote(payload));
             return voOf(id);
         }
         if (Boolean.FALSE.equals(mark)) {
@@ -1522,9 +1534,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                     && !access.currentUserId().equals(asLong(handoff.get("requesterId")))) {
                 if (!access.isBoss() && "pending".equals(current.getAssignState()))
                     throw new ServiceException("请先接收项目，再提交加急结果");
-                submitUrgency(current, handoff);
+                submitUrgency(current, handoff, handoffSubmitNote(payload));
             } else if (handoff != null && access.currentUserId().equals(asLong(handoff.get("requesterId")))) {
-                orderMapper.deleteUrgentHandoff(id);
+                clearUrgency(id);
             }
         }
         orderMapper.clearReceipts(id, "manual");
@@ -1583,8 +1595,10 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         Long requester = handoff == null ? actor : asLong(handoff.get("requesterId"));
         if (date != null && current.getOwnerId() != null && !requester.equals(current.getOwnerId())
                 && !closedStatus(current.getStatus()) && (!Boolean.TRUE.equals(current.getHandled()) || handoff != null || reopen))
+        {
+            if (handoff == null) recordTurnChange(id,"urgent","handoff.start");
             orderMapper.saveUrgentHandoff(id, requester, date);
-        else orderMapper.deleteUrgentHandoff(id);
+        } else clearUrgency(id);
         if (handoff != null && !actor.equals(requester)) {
             String text = access.currentName() + (date == null ? " 取消了本次加急" : " 将加急截止时间改为 " + date);
             addTimeline(id, access.currentName(), "handoff", text, null, new Date());
@@ -1595,12 +1609,18 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return voOf(id);
     }
 
+    private void clearUrgency(Long id)
+    {
+        orderMapper.deleteUrgentHandoff(id);
+        orderMapper.removeTaskTurn(id,"urgent");
+    }
+
     private void endUrgentHandoff(Long id)
     {
         orderMapper.clearTaskTurns(id);
         Map<String, Object> handoff = urgentHandoff(id);
         if (handoff != null && handoff.get("submittedAt") == null) {
-            orderMapper.deleteUrgentHandoff(id);
+            clearUrgency(id);
             orderMapper.updateUrgentUntil(id, null);
             orderMapper.clearReceipts(id, "urgent");
         }
@@ -1612,10 +1632,102 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return note;
     }
 
-    private void assignTaskTurn(Long id, String key, Long executor) {
+    private String handoffSubmitNote(Map<String,Object> payload)
+    {
+        Object raw = payload == null ? null : payload.getOrDefault("submitNote", payload.get("note"));
+        String note = strOr(asStr(raw), "").trim();
+        if (note.codePointCount(0,note.length()) > 300) throw new ServiceException("说明最多 300 个字");
+        return note.isEmpty() ? null : note;
+    }
+
+    private void recordTurnChange(Long id, String key, String action)
+    {
+        addTimeline(id, access.currentName(), action, key, null, new Date());
+    }
+
+    private void returnTurn(Long id, String key, String note)
+    {
+        orderMapper.returnTaskTurn(id, key, note);
+        recordTurnChange(id,key,"handoff.return");
+    }
+
+    private void assignTaskTurn(Long id, String key, Long executor)
+    {
         Long sender = access.currentUserId();
-        if (executor != null && !executor.equals(sender)) orderMapper.assignTaskTurn(id, key, sender);
-        else orderMapper.removeTaskTurn(id, key);
+        if (executor != null && !executor.equals(sender)) {
+            orderMapper.assignTaskTurn(id, key, sender);
+            recordTurnChange(id,key,"handoff.start");
+        } else orderMapper.removeTaskTurn(id, key);
+    }
+
+    private void approvalReceipt(JiedanOrder order, String key, Map<String,Object> turn, String name)
+    {
+        if (turn == null || turn.get("submittedBy") == null) return;
+        Long submitter = asLong(turn.get("submittedBy"));
+        if (submitter.equals(access.currentUserId())) return;
+        Map<String,Object> data = new LinkedHashMap<>();
+        data.put("orderId",order.getId());
+        data.put("submitterId",submitter);
+        data.put("kind",key.startsWith("bug-") ? "bug" : key);
+        if (key.startsWith("bug-")) data.put("bugId", Long.valueOf(key.substring(4)));
+        String label;
+        switch (key) {
+            case "delivery": label = "项目验收"; break;
+            case "urgent": label = "加急事项"; break;
+            case "next": label = "下一步「"+excerpt(order.getNextStep())+"」"; break;
+            case "manual": label = "项目处理结果"; break;
+            default:
+                JiedanBug bug = bugMapper.selectById(asLong(data.get("bugId")));
+                label = "问题 #"+data.get("bugId")+(bug == null || StringUtils.isEmpty(bug.getContent()) ? "" : "「"+excerpt(bug.getContent())+"」");
+        }
+        data.put("actorId",access.currentUserId());
+        data.put("text",name+" 通过了你提交的"+label+" · "+excerpt(order.getTitle()));
+        addTimeline(order.getId(), name, "handoff.pass", JSON.toJSONString(data), null, new Date());
+    }
+
+    private Map<Long,List<Map<String,Object>>> recentHandoffApprovals()
+    {
+        Map<Long,List<Map<String,Object>>> events = new LinkedHashMap<>();
+        for (Map<String,Object> row : orderMapper.recentApprovals(access.currentUserId(),access.ownerScope())) {
+            Map<String,Object> event = JSON.parseObject(asStr(row.remove("detail")));
+            event.putAll(row);
+            events.computeIfAbsent(asLong(event.get("orderId")), key -> new ArrayList<>()).add(event);
+        }
+        return events;
+    }
+
+    private Long projectReviewer(Long id, Map<String,Object> turn)
+    {
+        List<Long> reviewers = access.bossUserIds();
+        Long reviewer = turn == null ? orderMapper.projectCreator(id) : asLong(turn.get("requesterId"));
+        if (reviewer != null && reviewers.contains(reviewer)) return reviewer;
+        return reviewers.isEmpty() ? null : reviewers.get(0);
+    }
+
+    private void updateDelivery(JiedanOrder order, Long owner, String status, Map<String,Object> payload)
+    {
+        if (status == null || status.equals(order.getStatus())) return;
+        Long id = order.getId();
+        Map<String,Object> turn = taskTurn(id,"delivery");
+        Long actor = access.currentUserId();
+        if ("review".equals(status) && actor.equals(owner)) {
+            Long reviewer = projectReviewer(id,turn);
+            if (reviewer != null && !actor.equals(reviewer)) {
+                if (turn == null) recordTurnChange(id,"delivery","handoff.start");
+                orderMapper.ensureTaskTurn(id, "delivery", reviewer);
+                String note = handoffSubmitNote(payload);
+                orderMapper.submitTaskTurn(id,"delivery",actor,note);
+                addTimeline(id,access.currentName(),"delivery", note == null ? "提交项目验收" : note, jsonStr(payload.get("attachments")),new Date());
+                orderMapper.clearReceipts(id,"delivery");
+                return;
+            }
+        }
+        if ("done".equals(status) && "review".equals(order.getStatus()) && turn != null) {
+            if (!actor.equals(asLong(turn.get("requesterId")))) throw new ServiceException("请由本次验收人确认",403);
+            approvalReceipt(order,"delivery",turn,access.currentName());
+        }
+        orderMapper.removeTaskTurn(id,"delivery");
+        orderMapper.clearReceipts(id,"delivery");
     }
 
     private Map<String,Object> taskTurn(Long id, String key) {
@@ -1623,14 +1735,14 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         return turns == null ? null : turns.getJSONObject(key);
     }
 
-    private void submitTaskTurn(JiedanOrder order, String key, Long executor, Map<String,Object> turn, String label, NoticeTarget target) {
+    private void submitTaskTurn(JiedanOrder order, String key, Long executor, Map<String,Object> turn, String label, NoticeTarget target, String said) {
         Long actor = access.currentUserId();
         if (!actor.equals(executor)) throw new ServiceException("请由当前处理人提交结果",403);
         if (turn.get("submittedAt") != null) throw new ServiceException("已提交，等待发起人确认",409);
         Long reviewer = asLong(turn.get("requesterId"));
-        orderMapper.submitTaskTurn(order.getId(), key, actor);
+        orderMapper.submitTaskTurn(order.getId(), key, actor, said);
         orderMapper.clearReceipts(order.getId(), key);
-        String text = access.currentName()+" 已提交"+label+"，等"+ownerName(reviewer)+"确认";
+        String text = access.currentName()+" 已提交"+label+"，等"+ownerName(reviewer)+"确认"+(said == null ? "" : " · "+said);
         addTimeline(order.getId(), access.currentName(), "handoff", text, null, new Date());
         touchUnread(order, actor, new Date());
         pushService.pushToTarget(reviewer, label+"等你确认 · "+order.getTitle(), text, target);
@@ -1654,11 +1766,12 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         String label = next ? "下一步「"+order.getNextStep()+"」" : "项目处理结果";
         String note = "return".equals(decision) ? handoffReturnNote(body) : "";
         if ("confirm".equals(decision)) {
+            approvalReceipt(order,key,turn,access.currentName());
             if (next) orderMapper.updateNextStep(id,null,null,null,new Date());
             else orderMapper.updateHandling(id,true,new Date());
             orderMapper.removeTaskTurn(id,key);
         } else if ("return".equals(decision)) {
-            orderMapper.returnTaskTurn(id,key,note);
+            returnTurn(id,key,note);
         } else throw new ServiceException("请选择确认或退回");
         String text = access.currentName()+("confirm".equals(decision) ? " 确认完成：" : " 退回处理：")+label;
         orderMapper.clearReceipts(id,key);
@@ -1679,15 +1792,18 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
 
     // The caller holds the project row lock. Clearing the deadline removes the executor's task;
     // the handoff and its original deadline survive until the requester makes a decision.
-    private void submitUrgency(JiedanOrder order, Map<String, Object> handoff)
+    private void submitUrgency(JiedanOrder order, Map<String, Object> handoff, String said)
     {
         Long id = order.getId();
         Long actor = access.currentUserId();
         Long requester = asLong(handoff.get("requesterId"));
+        if (handoff.get("submittedAt") != null) throw new ServiceException("这条加急已提交",409);
+        orderMapper.ensureTaskTurn(id,"urgent",requester);
+        orderMapper.submitTaskTurn(id,"urgent",actor,said);
         orderMapper.submitUrgentHandoff(id, actor);
         orderMapper.updateUrgentUntil(id, null);
         orderMapper.clearReceipts(id, "urgent");
-        String text = access.currentName() + " 已提交加急结果，等" + ownerName(requester) + "确认";
+        String text = access.currentName() + " 已提交加急结果，等" + ownerName(requester) + "确认" + (said == null ? "" : " · " + said);
         addTimeline(id, access.currentName(), "handoff", text, null, new Date());
         pushService.pushToTarget(requester, "加急结果等你确认 · " + order.getTitle(), text, NoticeTarget.order(id));
     }
@@ -1711,7 +1827,9 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         String decision = asStr(payload.get("decision"));
         String text;
         if ("confirm".equals(decision)) {
-            orderMapper.deleteUrgentHandoff(id);
+            approvalReceipt(order,"urgent",handoff,access.currentName());
+            orderMapper.clearReceipts(id,"urgent");
+            clearUrgency(id);
             orderMapper.bumpVersion(id);
             text = "已确认本次加急完成";
         } else if ("return".equals(decision)) {
@@ -1720,6 +1838,8 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             if (closedStatus(order.getStatus())) throw new ServiceException("项目已结束，请先重新开启项目再退回加急");
             if (order.getOwnerId() == null) throw new ServiceException("请先指定项目负责人");
             orderMapper.returnUrgentHandoff(id, note);
+            orderMapper.removeTaskTurn(id,"urgent");
+            recordTurnChange(id,"urgent","handoff.return");
             orderMapper.updateUrgentUntil(id, due);
             if (Boolean.TRUE.equals(order.getHandled())) orderMapper.updateHandling(id, false, new Date());
             orderMapper.clearReceipts(id, "urgent");
@@ -1727,7 +1847,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         } else throw new ServiceException("请选择确认完成或退回处理");
         addTimeline(id, access.currentName(), "handoff", text, null, new Date());
         Long recipient = "confirm".equals(decision) ? asLong(handoff.get("submittedBy")) : order.getOwnerId();
-        if (!actor.equals(recipient) && recipient.equals(order.getOwnerId()))
+        if (recipient != null && !actor.equals(recipient) && recipient.equals(order.getOwnerId()))
             pushService.pushToTarget(recipient, text, order.getTitle() + " · " + access.currentName(), NoticeTarget.order(id));
         return voOf(id);
     }
@@ -1871,17 +1991,19 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 if (!(bugId instanceof Integer || bugId instanceof Long)) break;
                 Long target = ((Number) bugId).longValue();
                 if (bugMapper.selectActionForReminder(id, target).isEmpty()) break;
-                return changeBugStatus(target, Map.of("status", "resolved"));
+                Map<String,Object> change = new LinkedHashMap<>(payload);
+                change.put("status","resolved");
+                return changeBugStatus(target,change);
             case "next":
                 if (StringUtils.isEmpty(order.getNextStep())) break;
-                return completeNextStep(id, java.util.Collections.emptyMap());
+                return completeNextStep(id, payload);
             case "urgent":
                 if (!activeUrgency(order)) break;
                 if (!access.isBoss() && "pending".equals(order.getAssignState()))
                     throw new ServiceException("请先接收项目，再提交加急结果");
                 Map<String, Object> handoff = urgentHandoff(id);
                 if (handoff != null && !recipient.equals(asLong(handoff.get("requesterId")))) {
-                    submitUrgency(order, handoff);
+                    submitUrgency(order, handoff, handoffSubmitNote(payload));
                     return voOf(id);
                 }
                 Map<String, Object> urgency = new LinkedHashMap<>();
@@ -1890,11 +2012,64 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 return setUrgency(id, urgency);
             case "manual":
                 if (order.getHandledTime() == null || Boolean.TRUE.equals(order.getHandled())) break;
-                return setHandling(id, Map.of("version", version, "handled", true));
+                Map<String,Object> mark = new LinkedHashMap<>(payload);
+                mark.put("handled",true);
+                return setHandling(id, mark);
             default:
                 throw new ServiceException("请选择有效的待处理事项");
         }
         throw new ServiceException("这条事项已变更，请核对最新待处理清单", 409);
+    }
+
+    private String changeKey(String kind, Map<String,Object> payload)
+    {
+        if ("bug".equals(kind)) {
+            Long bugId = asLong(payload.get("bugId"));
+            if (bugId == null || bugId <= 0) throw new ServiceException("请选择具体问题");
+            return "bug-"+bugId;
+        }
+        if (List.of("next","manual","urgent","delivery").contains(kind)) return kind;
+        throw new ServiceException("请选择有效的交接事项");
+    }
+
+    @Override
+    @Transactional
+    public Map<String,Object> withdrawHandoff(Long id, Map<String,Object> payload)
+    {
+        JiedanOrder order = orderMapper.selectScopedForUpdate(id, access.ownerScope());
+        if (order == null) throw new ServiceException(JiedanAccess.DENIED);
+        if (closedStatus(order.getStatus()) || !Objects.equals(order.getVersion(),asLong(payload.get("version"))))
+            throw new ServiceException("事项已变化，请刷新后再操作",409);
+        String kind = Objects.toString(payload.get("kind"),"");
+        String key = changeKey(kind,payload);
+        Map<String,Object> turn = "urgent".equals(kind) ? urgentHandoff(id) : taskTurn(id,key);
+        Long me = access.currentUserId();
+        if (turn == null || turn.get("submittedAt") == null) throw new ServiceException("当前没有可以撤回的提交",409);
+        if (!me.equals(asLong(turn.get("submittedBy"))) || !me.equals(pendingRecipient(order,kind)))
+            throw new ServiceException("只有当前事项的提交人可以撤回",403);
+        if ("bug".equals(kind)) {
+            JiedanBug bug = bugMapper.lockById(asLong(payload.get("bugId")));
+            if (bug == null || !id.equals(bug.getOrderId()) || !"ai_review".equals(bug.getStatus()))
+                throw new ServiceException("问题已变化，请刷新后再操作",409);
+            bugMapper.updateStatus(bug.getId(),"action");
+        } else if ("urgent".equals(kind)) {
+            orderMapper.withdrawUrgentTurn(id);
+            orderMapper.updateUrgentUntil(id,asStr(turn.get("due")));
+            if (Boolean.TRUE.equals(order.getHandled())) orderMapper.updateHandling(id,false,new Date());
+        } else if ("delivery".equals(kind)) {
+            if (!"review".equals(order.getStatus())) throw new ServiceException("项目当前没有待验收的提交",409);
+            JiedanOrder update = new JiedanOrder();
+            update.setId(id);
+            update.setStatus("doing");
+            orderMapper.update(update);
+        }
+        orderMapper.withdrawTaskTurn(id,key);
+        orderMapper.clearReceipts(id,key);
+        String label = "bug".equals(kind) ? "问题 #"+payload.get("bugId") :
+                "delivery".equals(kind) ? "项目验收" : "urgent".equals(kind) ? "加急事项" : "next".equals(kind) ? "下一步" : "项目处理结果";
+        addTimeline(id,access.currentName(),"handoff",access.currentName()+" 撤回了"+label+"的提交",null,new Date());
+        touchUnread(order,me,new Date());
+        return voOf(id);
     }
 
     @Override
@@ -1908,7 +2083,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     {
         JiedanOrder order = orderMapper.selectScopedForUpdate(id, access.ownerScope());
         if (order == null) throw new ServiceException(JiedanAccess.DENIED);
-        if ("done".equals(order.getStatus()) || "cancelled".equals(order.getStatus()))
+        if (closedStatus(order.getStatus()) && !"urgentReview".equals(payload.get("kind")))
             throw new ServiceException("项目已结束，无需提醒");
         Object version = payload.get("version");
         if (!(version instanceof Integer || version instanceof Long)
@@ -1916,16 +2091,34 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             throw new ServiceException("项目已更新，请核对最新待处理事项后再提醒", 409);
 
         String taskKey = Objects.toString(payload.get("kind"), "");
-        Long recipient = pendingRecipient(order, taskKey);
-        if ("manual".equals(taskKey) || "next".equals(taskKey)) {
-            Map<String,Object> turn = taskTurn(id,taskKey);
-            if (turn != null && turn.get("submittedAt") != null)
-                throw new ServiceException("处理人已提交，等发起人确认",409);
+        boolean review = taskKey.endsWith("Review");
+        if (review) {
+            String type = taskKey.substring(0,taskKey.length()-"Review".length());
+            taskKey = changeKey("issue".equals(type) ? "bug" : type,payload);
         }
+        Map<String,Object> turn = "urgent".equals(taskKey) ? urgentHandoff(id) : taskTurn(id,taskKey);
+        Long recipient = pendingRecipient(order, taskKey);
         NoticeTarget target = NoticeTarget.order(id);
         String detail;
-        switch (taskKey)
-        {
+        if (review) {
+            if (turn == null || turn.get("submittedAt") == null)
+                throw new ServiceException("这条事项当前没有待确认的提交",409);
+            if (!access.currentUserId().equals(asLong(turn.get("submittedBy"))))
+                throw new ServiceException("请由本次提交人提醒验收",403);
+            recipient = asLong(turn.get("requesterId"));
+            detail = "请确认已提交的"+("delivery".equals(taskKey) ? "项目验收" : "next".equals(taskKey) ? "下一步" :
+                    "urgent".equals(taskKey) ? "加急事项" : "manual".equals(taskKey) ? "项目处理结果" : "问题 #"+payload.get("bugId"));
+            if (taskKey.startsWith("bug-")) target = NoticeTarget.bug(id,asLong(payload.get("bugId")));
+            else if ("manual".equals(taskKey)) target = NoticeTarget.handling(id);
+        } else {
+            if (turn != null && turn.get("submittedAt") != null)
+                throw new ServiceException("处理人已提交，等发起人确认",409);
+            switch (taskKey) {
+            case "delivery":
+                if (!"doing".equals(order.getStatus()) || turn == null)
+                    throw new ServiceException("这条项目当前无需重新提交验收",409);
+                detail = "请处理项目并提交验收"+(turn.get("returnNote") == null ? "" : " · "+turn.get("returnNote"));
+                break;
             case "urgent":
                 if (!activeUrgency(order))
                     throw new ServiceException("这条加急事项已经移出待处理");
@@ -1962,6 +2155,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
                 break;
             default:
                 throw new ServiceException("请选择有效的待处理事项");
+            }
         }
         if (recipient == null || !collaborators(order).contains(recipient))
             throw new ServiceException("请先为这条事项指定有效的负责人");
@@ -2368,15 +2562,18 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
     /** 老板验收不通过：退回给负责人返工（项目回到“进行中”，改稿次数 +1），必须写原因。 */
     @Override
     @Transactional
-    public Map<String, Object> returnForRework(Long id, String reason)
+    public Map<String, Object> returnForRework(Long id, Map<String,Object> payload)
     {
         access.requireBoss();
-        JiedanOrder o = guard(id);
+        JiedanOrder o = orderMapper.selectScopedForUpdate(id,access.ownerScope());
+        if (o == null) throw new ServiceException(JiedanAccess.DENIED);
+        if (payload.containsKey("version") && !Objects.equals(o.getVersion(),asLong(payload.get("version"))))
+            throw new ServiceException("项目已变化，请刷新后再操作",409);
         if (!"review".equals(o.getStatus()) && !"done".equals(o.getStatus()))
         {
             throw new ServiceException("只有“待验收”或“已完成”的项目可以退回返工");
         }
-        String why = requireReason(reason);
+        String why = requireReason(asStr(payload.get("reason")));
         Long me = access.currentUserId();
         String name = access.currentName();
         Date now = new Date();
@@ -2388,6 +2585,17 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         upd.setUnread(join(othersThan(o.getOwnerId(), me)));
         upd.setUpdateTime(now);
         orderMapper.update(upd);
+        // 退回原因记在「项目验收」这条交接上：负责人的待办里直接看到为什么被退回
+        if (o.getOwnerId() != null && !o.getOwnerId().equals(me)) {
+            Map<String,Object> delivery = taskTurn(id,"delivery");
+            if (delivery != null && delivery.get("submittedAt") != null && !me.equals(asLong(delivery.get("requesterId"))))
+                throw new ServiceException("请由本次验收人退回",403);
+            if (delivery == null) recordTurnChange(id,"delivery","handoff.start");
+            orderMapper.ensureTaskTurn(id, "delivery", me);
+            String reasonText = why.codePointCount(0,why.length()) <= 300 ? why : why.substring(0,why.offsetByCodePoints(0,300));
+            returnTurn(id, "delivery", reasonText);
+            orderMapper.clearReceipts(id,"delivery");
+        } else orderMapper.removeTaskTurn(id, "delivery");
 
         addTimeline(id, name, "note", name + " 退回返工：" + why, null, now);
         audit.record("order.return", "order", id, o.getTitle(), "原因：" + why + "；改稿次数 +1");
@@ -2610,6 +2818,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
             vo.put("handled", Boolean.TRUE.equals(o.getHandled()));
             vo.put("handledTime", o.getHandledTime());
             vo.put("urgentUntil", o.getUrgentUntil());
+            vo.put("recentApprovalEvents", recentHandoffApprovals().getOrDefault(o.getId(), List.of()));
             vo.put("urgentHandoff", urgentHandoff(o.getId()));
             vo.put("taskTurns", JSON.parseObject(orderMapper.selectTaskTurns(o.getId())));
             vo.put("reminderReceipts", parseReceipts(orderMapper.selectReceipts(o.getId())));
@@ -2747,7 +2956,7 @@ public class JiedanOrderServiceImpl implements IJiedanOrderService
         List<Map<String, Object>> tl = new ArrayList<>();
         for (JiedanTimeline t : timelineMapper.selectByOrderId(o.getId()))
         {
-            if (!includeInternal && !isChatType(t.getType())) continue;
+            if ((t.getType() != null && t.getType().startsWith("handoff.")) || !includeInternal && !isChatType(t.getType())) continue;
             Map<String, Object> tm = new LinkedHashMap<>();
             tm.put("id", t.getId());
             tm.put("time", fmt(t.getCreateTime()));

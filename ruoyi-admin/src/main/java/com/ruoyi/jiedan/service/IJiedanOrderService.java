@@ -36,7 +36,7 @@ public interface IJiedanOrderService
     Map<String, Object> handback(Long id, String reason);
 
     /** 老板验收不通过：退回返工（必须写原因），回到进行中、改稿 +1 */
-    Map<String, Object> returnForRework(Long id, String reason);
+    Map<String, Object> returnForRework(Long id, Map<String,Object> payload);
 
     /** 给申请流程用：记时间线、标未读、推送 */
     void flowEvent(Long orderId, String text, String pushTitle, String pushBody);
@@ -125,6 +125,7 @@ public interface IJiedanOrderService
 
     Map<String, Object> setHandling(Long id, Map<String, Object> payload);
 
+    Map<String,Object> withdrawHandoff(Long id, Map<String,Object> body);
     Map<String,Object> reviewTaskTurn(Long id, Map<String,Object> body);
     Map<String, Object> reviewUrgency(Long id, Map<String, Object> payload);
 

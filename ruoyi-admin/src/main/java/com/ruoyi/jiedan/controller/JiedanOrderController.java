@@ -103,6 +103,13 @@ public class JiedanOrderController extends BaseController
         return AjaxResult.success(service.income());
     }
 
+    @PutMapping("/{id}/handoff-withdraw")
+    @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
+    public AjaxResult withdrawHandoff(@PathVariable Long id, @RequestBody Map<String,Object> body)
+    {
+        return AjaxResult.success(service.withdrawHandoff(id,body));
+    }
+
     @PostMapping("/{id}/task-review")
     @PreAuthorize("@ss.hasAnyRoles('admin,employee')")
     public AjaxResult reviewTask(@PathVariable Long id, @RequestBody Map<String,Object> body) {
@@ -159,7 +166,7 @@ public class JiedanOrderController extends BaseController
     @PreAuthorize("@ss.hasRole('admin')")
     public AjaxResult returnForRework(@PathVariable Long id, @RequestBody Map<String, Object> body)
     {
-        return AjaxResult.success(service.returnForRework(id, body == null ? null : (String) body.get("reason")));
+        return AjaxResult.success(service.returnForRework(id, body));
     }
 
     /** 记一笔收款。 */

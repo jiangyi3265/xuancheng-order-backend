@@ -1027,6 +1027,7 @@ CREATE TABLE IF NOT EXISTS jiedan_task_turn (
   submitted_at datetime DEFAULT NULL,
   returned_at datetime DEFAULT NULL,
   return_note varchar(300) DEFAULT NULL,
+  submit_note varchar(300) DEFAULT NULL,
   PRIMARY KEY(order_id,task_key),
   FOREIGN KEY (order_id) REFERENCES jiedan_order(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
